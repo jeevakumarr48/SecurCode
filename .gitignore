@@ -1,40 +1,40 @@
-# Dependencies
-node_modules/
-.venv/
-venv/
-__pycache__/
-*.pyc
+# Python runtime and test artifacts
+backend/.venv/
+backend/**/__pycache__/
+backend/.pytest_cache/
+*.py[cod]
 
-# Environment variables
+# Local application data
+backend/*.db
 .env
 .env.*
-!.env.example
 
-# Build outputs
-dist/
-build/
-.next/
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+```gitignore
 
-# Logs
+# Additional Python test and runtime artifacts
+.pytest_cache/
+**/.pytest_cache/
+__pycache__/
+**/__pycache__/
+.coverage
+htmlcov/
+
+# Logs and temporary files
 *.log
-logs/
+*.tmp
 
-# IDE
-.vscode/
-.idea/
+# Local databases anywhere in the project
+*.db
+*.sqlite
+*.sqlite3
 
-# OS
+# Frontend tooling
+frontend/.vite/
+
+# Operating system files
 .DS_Store
 Thumbs.db
-
-# Python
-.pytest_cache/
-.mypy_cache/
-
-# Docker
-docker-compose.override.yml
-
-# Secrets
-*.pem
-*.key
-secrets/
+```
