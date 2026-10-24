@@ -45,7 +45,7 @@ Java and Go are not currently advertised as supported. The scanner router is ext
 From the repository root, use the existing virtual environment:
 
 ```powershell
-backend\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
+backend\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
 ```
 
 In a second terminal, start the frontend:
@@ -107,6 +107,32 @@ Run both checks with one command from the repository root:
 ```
 
 The validation script stops and returns a failure if the backend suite or frontend production build fails.
+
+## CI Security Gate
+
+The GitHub Actions workflow scans added, copied, modified, and renamed source files in each push or pull request. Deleted files are excluded; unsupported extensions and generated/minified files are skipped. Missing changed source files, invalid Python syntax, read failures, malformed scanner results, and scanner exceptions fail the gate instead of being treated as clean.
+
+The default `SECURCODE_FAIL_ON_SEVERITY` threshold is `HIGH`: HIGH and CRITICAL findings fail the build, while MEDIUM and LOW findings are reported only if the threshold is lowered to include them. Configure the workflow environment to `CRITICAL`, `MEDIUM`, or `LOW` to adjust the threshold. Accepted values are `CRITICAL`, `HIGH`, `MEDIUM`, and `LOW`; invalid values fail the gate.
+
+The gate uses the existing Python and JavaScript/TypeScript rules. It does not run source files, and its coverage and false-positive limitations remain as described below.
+
+### Trivy Filesystem Scan
+
+CI installs Trivy `v0.76.1` and runs `trivy fs` over the repository. The integration enables Trivy's vulnerability (`vuln`) and misconfiguration (`misconfig`) scanners, covering dependency manifests/lockfiles and supported IaC files. The intentionally vulnerable scanner demo fixtures are excluded from this repository-wide gate. Findings are normalized to SecurCode's finding fields and retain Trivy identifiers, target paths, severity, line/resource information, references, and available remediation details. Findings at or above `SECURCODE_FAIL_ON_SEVERITY` fail CI; the default is `HIGH`. Trivy execution failures, timeouts, invalid JSON, and unsupported severities fail closed.
+
+After installation, CI also runs live integration tests against a temporary Terraform fixture using Trivy's `misconfig` scanner only. This confirms real JSON parsing and nonzero handling for a missing target without requiring the vulnerability database. Deterministic unit tests continue to use fixed fixture JSON.
+
+For local use, install Trivy using the [official installation guide](https://trivy.dev/latest/getting-started/installation/), then run from the repository root:
+
+```powershell
+trivy --version
+cd backend
+.venv\Scripts\python.exe -m security_engine.trivy_scan .. --fail-on-severity HIGH
+```
+
+Use Trivy `v0.76.1` or a compatible release and ensure `trivy` is available on `PATH`. The command reports a clear error and exits nonzero if Trivy is missing.
+
+Trivy is not currently bundled with SecurCode. It requires network access to fetch/update vulnerability data unless a Trivy cache is already available. Secret scanning is deliberately not enabled because the existing SecurCode rules already cover basic credential-like patterns; container/image and repository-history scans are not implemented in this integration.
 
 ## Limitations And False Positives
 

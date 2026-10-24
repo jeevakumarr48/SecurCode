@@ -11,10 +11,16 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,6 +37,37 @@ jobs:
         working-directory: backend
         run: python -m pytest -v
 
+      - name: Run changed-file security gate
+        working-directory: backend
+        env:
+          SECURCODE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          SECURCODE_FAIL_ON_SEVERITY: HIGH
+        run: python -m security_engine.ci_gate
+
+      - name: Install Trivy
+        uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
+        with:
+          version: v0.76.1
+          cache: true
+
+      - name: Run Trivy filesystem, dependency, and IaC scan
+        working-directory: backend
+        env:
+          SECURCODE_FAIL_ON_SEVERITY: HIGH
+        run: >-
+          python -m security_engine.trivy_scan ..
+          --fail-on-severity HIGH
+          --timeout 600
+          --skip-dir .git
+          --skip-dir frontend/node_modules
+          --skip-dir frontend/dist
+          --skip-dir backend/app/api/docs/security-demo
+
+      - name: Verify live Trivy JSON parsing and failure handling
+        working-directory: backend
+        timeout-minutes: 5
+        run: python -m pytest -q security_engine/test_trivy_scan.py
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -45,29 +82,3 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
-
-      - name: Verify security scanner detection
-        working-directory: backend
-        run: |
-          python - <<'PY'
-          from security_engine.scanner.engine import scan_project
-
-          vulnerable = scan_project(
-              "app/api/docs/security-demo/vulnerable.py"
-          )
-          safe = scan_project(
-              "app/api/docs/security-demo/safe-example.py"
-          )
-
-          print("Vulnerable sample findings:", vulnerable["total_findings"])
-          print("Safe sample findings:", safe["total_findings"])
-
-          assert vulnerable["total_findings"] > 0, (
-              "Scanner failed to detect the vulnerable sample"
-          )
-          assert safe["total_findings"] == 0, (
-              "Safe sample unexpectedly produced findings"
-          )
-
-          print("Scanner verification passed.")
-          PY

@@ -109,6 +109,7 @@ function App() {
   const [activeNav, setActiveNav] = useState("Overview");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [data, setData] = useState({ status: null, stats: null, history: null });
+  const [watcherData, setWatcherData] = useState({ status: null, findings: null, error: "" });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [connectionError, setConnectionError] = useState("");
@@ -150,6 +151,34 @@ function App() {
 
   useEffect(() => {
     loadDashboard();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let requestPending = false;
+
+    async function loadWatcher() {
+      if (requestPending) return;
+      requestPending = true;
+      try {
+        const [status, findings] = await Promise.all([
+          request("/watcher/status"),
+          request("/watcher/findings"),
+        ]);
+        if (active) setWatcherData({ status, findings, error: "" });
+      } catch (error) {
+        if (active) setWatcherData((current) => ({ ...current, error: error.message }));
+      } finally {
+        requestPending = false;
+      }
+    }
+
+    loadWatcher();
+    const interval = window.setInterval(loadWatcher, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
   }, []);
 
   async function handleScan(event) {
@@ -251,6 +280,17 @@ function App() {
               <button className="button button-primary" type="submit" disabled={scanState === "loading"}>{scanState === "loading" ? <><span className="button-spinner" />Scanning</> : <>Scan project <Icon name="arrow" size={15} /></>}</button>
             </form>
             {scanState !== "idle" && <div className={`scan-feedback feedback-${scanState}`} role={scanState === "error" ? "alert" : "status"}><span className="feedback-icon">{scanState === "success" ? "✓" : scanState === "error" ? "!" : "·"}</span>{scanMessage}</div>}
+          </section>
+
+          <section className="table-section" aria-labelledby="watcher-title">
+            <div className="section-heading">
+              <div><h2 id="watcher-title">Live file watcher</h2><p>Latest findings from a changed source file in the watched demo directory.</p></div>
+              <StatusBadge status={watcherData.status ? (watcherData.status.running ? "running" : "stopped") : watcherData.error ? "unavailable" : "connecting"} />
+            </div>
+            {watcherData.error ? <div className="api-alert" role="alert"><div><strong>Watcher data is unavailable</strong><span>{watcherData.error}</span></div></div> : <>
+              <div className="findings-context"><span>Last file</span><strong title={watcherData.findings?.last_file || ""}>{watcherData.findings?.last_file ? shortPath(watcherData.findings.last_file) : "No file changes detected yet"}</strong><span>{formatNumber(watcherData.findings?.total_findings)} findings</span></div>
+              <div className="table-wrap"><table><thead><tr><th>Severity</th><th>Rule ID</th><th>Line</th><th>Description</th></tr></thead><tbody>{!watcherData.findings ? <EmptyTable colSpan="4">Waiting for watcher results.</EmptyTable> : watcherData.findings.findings.length === 0 ? <EmptyTable colSpan="4">The latest changed file has no findings.</EmptyTable> : watcherData.findings.findings.map((finding, index) => <tr key={`${finding.test_id}-${finding.line_number}-${index}`}><td><span className={severityClass(finding.severity)}>{finding.severity || "Unknown"}</span></td><td><code className="rule-id">{finding.test_id || "-"}</code></td><td className="numeric-value">{finding.line_number ?? "-"}</td><td><span className="description-value">{finding.description || "No description provided."}</span></td></tr>)}</tbody></table></div>
+            </>}
           </section>
 
           {connectionError && <div className="api-alert" role="alert"><div><strong>{data.status ? "Some dashboard data is unavailable" : "Unable to reach the SecurCode API"}</strong><span>{connectionError} Check that the backend is running at {API_BASE_URL}.</span></div><button className="button button-secondary" onClick={() => loadDashboard(true)} disabled={refreshing}><Icon name="refresh" size={15} />Retry</button></div>}
