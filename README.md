@@ -134,6 +134,32 @@ Use Trivy `v0.76.1` or a compatible release and ensure `trivy` is available on `
 
 Trivy is not currently bundled with SecurCode. It requires network access to fetch/update vulnerability data unless a Trivy cache is already available. Secret scanning is deliberately not enabled because the existing SecurCode rules already cover basic credential-like patterns; container/image and repository-history scans are not implemented in this integration.
 
+## Optional AWS Assessment
+
+The standalone AWS assessment uses boto3 read-only APIs and is not part of source scans, the API, file watcher, or CI gate. Install the optional, pinned SDK dependencies from the `backend` directory:
+
+```powershell
+python -m pip install -r requirements-aws.txt
+```
+
+Authenticate with an existing AWS SSO/profile setup or another supported AWS credential provider. Do not pass credentials to SecurCode. Without `--profile`, boto3 uses the standard credential chain. Run from the `backend` directory:
+
+```powershell
+python -m security_engine.aws_assessment --profile security-audit --region us-east-1
+```
+
+Repeat `--region` to assess more than one region. If omitted, the selected profile's configured default region is used. The command does not create, modify, or delete AWS resources.
+
+The initial checks use `ListBuckets`, `GetBucketPolicyStatus`, `GetBucketAcl`, and `GetPublicAccessBlock` to report bucket policies classified as public, public or authenticated-user bucket ACL grants, and incomplete bucket-level public-access-block settings. This is not comprehensive S3 public-access analysis: it does not inspect object ACLs, access-point policies, account-level or organization-level public-access blocks, or determine effective access after all controls are combined. Security-group findings cover world-open all-protocol rules and TCP SSH/RDP or UDP RDP port ranges; other protocols/ports are not assessed. CloudTrail findings cover trail presence, logging state, and active multi-region coverage across the selected regions. Inventory calls follow AWS pagination tokens. These are configuration indicators, not proof of effective exploitability. Coverage is limited to the selected AWS profile and regions; it does not assess organization-wide controls or every AWS service.
+
+The assessment requires these read-only IAM actions:
+
+- `s3:ListAllMyBuckets`, `s3:GetBucketPolicyStatus`, `s3:GetBucketPublicAccessBlock`, `s3:GetBucketAcl`
+- `ec2:DescribeSecurityGroups`
+- `cloudtrail:DescribeTrails`, `cloudtrail:GetTrailStatus`
+
+AWS may require `Resource: "*"` for list/describe actions; scope bucket-level S3 read actions to the assessed buckets where supported. Missing permissions and AWS API failures stop the assessment with an explicit error rather than a clean result. AWS SDK dependencies are excluded from the base requirements, so existing source scans continue to run without boto3 or AWS credentials.
+
 ## Limitations And False Positives
 
 - Pattern-based JavaScript and TypeScript checks cannot resolve aliases, control flow, or multi-line syntax reliably.
