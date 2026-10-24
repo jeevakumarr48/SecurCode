@@ -104,6 +104,7 @@ def test_changed_files_include_edits_and_additions_but_not_deletions(tmp_path):
             cwd=tmp_path,
             check=True,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         ).stdout.strip()
 
