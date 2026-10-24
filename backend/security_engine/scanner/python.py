@@ -79,15 +79,10 @@ def _is_secret_assignment(node):
     return any(SECRET_NAME_PATTERN.search(name) for name in names)
 
 
-def scan_python_file(filename, strict=False):
-    try:
-        with open(filename, "r", encoding="utf-8-sig") as file:
-            source = file.read()
-        tree = ast.parse(source, filename=filename)
-    except (OSError, SyntaxError, UnicodeDecodeError):
-        if strict:
-            raise
-        return []
+def scan_python_file(filename):
+    with open(filename, "r", encoding="utf-8-sig") as file:
+        source = file.read()
+    tree = ast.parse(source, filename=filename)
 
     findings = []
 

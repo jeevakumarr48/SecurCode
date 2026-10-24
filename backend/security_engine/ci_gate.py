@@ -92,7 +92,7 @@ def evaluate_files(files, threshold=DEFAULT_THRESHOLD, repository=None):
             raise GateError(f"Changed source file is missing or not a file: {relative_path}")
 
         try:
-            findings = scan_file(path, strict=True)
+            findings = scan_file(path)
         except Exception as error:
             raise GateError(f"Scanner failed for {relative_path}: {error}") from error
 

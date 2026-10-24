@@ -11,7 +11,7 @@ SecurCode is a lightweight, local-first static application security testing (SAS
 - `backend/database.py` stores scan results and calculates aggregate statistics in SQLite.
 - `frontend/` contains the React/Vite dashboard.
 
-The scanner never executes source code. The API resolves every requested path inside the repository workspace, rejects absolute paths and traversal segments, and does not follow symlinked directories during discovery.
+The scanner never executes source code. The API resolves every requested path inside the repository workspace, rejects absolute paths and traversal segments, and does not follow symlinked directories during discovery. Supported source symlinks are reported as scan errors instead of being silently treated as scanned. A scan that encounters inaccessible directories, unreadable or undecodable source files, or Python syntax errors is marked partial or failed rather than reported clean.
 
 ## Supported Coverage
 
@@ -36,7 +36,7 @@ JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`) and TypeScript (`.ts`, `.tsx`) use a 
 - `JSSEC004` (HIGH): `spawn()` or `spawnSync()` with `shell: true` on the same call line.
 - `JSSEC005` (MEDIUM): conservative hardcoded credential-like assignments.
 
-This is not complete JavaScript or TypeScript semantic analysis. Multi-line command options, aliases, framework-specific sinks, and deeply nested syntax require a real parser and are known limitations.
+This is not complete JavaScript or TypeScript semantic analysis and does not validate JavaScript/TypeScript syntax. Multi-line command options, aliases, framework-specific sinks, and deeply nested syntax require a real parser and are known limitations. Python syntax errors are detected by the AST parser and mark that scan incomplete.
 
 Java and Go are not currently advertised as supported. The scanner router is extension-based so future language modules can be added without changing the API or database contract.
 
@@ -66,8 +66,8 @@ npm run dev
 ## API
 
 - `GET /status` returns backend health and service name.
-- `POST /scan` accepts `{ "project_path": "backend/security_engine" }` or another relative file/directory path inside the workspace. It returns `status`, `total_findings`, and `findings`.
-- `GET /history?limit=20` returns persisted scans and their findings. The limit must be between 1 and 100.
+- `POST /scan` accepts `{ "project_path": "backend/security_engine" }` or another relative file/directory path inside the workspace. It returns `status`, `total_findings`, `findings`, and `errors`. `completed` means every discovered supported source file was scanned; `partial` means at least one source file was scanned but one or more scan errors occurred; `failed` means no source file was scanned successfully after an error. These scan outcomes are represented in the response body; unexpected scanner exceptions return HTTP 500 after recording a failed history entry. Error and finding paths are workspace-relative, or redacted when outside the workspace; messages expose exception categories, not source contents or raw parser errors. Invalid or out-of-workspace paths are rejected with an HTTP error.
+- `GET /history?limit=20` returns persisted scans, findings, and scan errors with workspace-relative or redacted paths. Partial and failed scan status is retained in SQLite. The limit must be between 1 and 100.
 - `GET /stats` returns total scans, total findings, high-severity findings, and the latest scan.
 
 Every finding includes `severity`, `confidence`, `test_id`, `language`, `filename`, `line_number`, and `description`. Existing stored findings without `language` remain readable by the dashboard as `Unknown`.

@@ -86,8 +86,13 @@ h2 { color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: .005
 .feedback-icon { display: grid; place-items: center; width: 16px; height: 16px; color: #0b0d0f; font-size: 10px; font-weight: 800; border-radius: 50%; background: var(--faint); }
 .feedback-success { color: var(--green); }
 .feedback-success .feedback-icon { background: var(--green); }
+.feedback-partial { color: var(--amber); }
+.feedback-partial .feedback-icon { background: var(--amber); }
 .feedback-error { color: var(--red); }
 .feedback-error .feedback-icon { background: var(--red); }
+.history-refresh-status { grid-column: 1 / -1; margin-top: -30px; padding: 0 0 8px 25px; font-size: 11px; }
+.history-refreshed { color: var(--green); }
+.history-stale { color: var(--red); }
 .button-spinner { width: 12px; height: 12px; border: 2px solid rgba(7, 17, 22, .35); border-top-color: #071116; border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -138,6 +143,8 @@ tbody tr:hover td { background: #171c20; }
 .status-badge { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; text-transform: capitalize; }
 .status-completed { color: var(--green); }
 .status-completed .status-dot { background: var(--green); }
+.status-partial { color: var(--amber); }
+.status-partial .status-dot { background: var(--amber); }
 .status-failed { color: var(--red); }
 .status-failed .status-dot { background: var(--red); }
 .status-running { color: var(--blue); }

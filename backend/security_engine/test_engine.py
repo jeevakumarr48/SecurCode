@@ -61,9 +61,8 @@ def test_invalid_python_is_handled(tmp_path):
         "def broken(:\n",
     )
 
-    findings = scan_file(path)
-
-    assert findings == []
+    with pytest.raises(SyntaxError):
+        scan_file(path)
 
 
 

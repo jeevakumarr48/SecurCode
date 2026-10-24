@@ -21,11 +21,20 @@ def initialize_database():
                 status TEXT NOT NULL,
                 total_findings INTEGER NOT NULL,
                 findings_json TEXT NOT NULL,
+                errors_json TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (
                     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 )
             )
         """)
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(scans)")
+        }
+        if "errors_json" not in columns:
+            connection.execute(
+                "ALTER TABLE scans ADD COLUMN errors_json TEXT NOT NULL DEFAULT '[]'"
+            )
 
 
 def save_scan(project_path, result):
@@ -33,14 +42,15 @@ def save_scan(project_path, result):
         cursor = connection.execute(
             """
             INSERT INTO scans (
-                project_path, status, total_findings, findings_json
-            ) VALUES (?, ?, ?, ?)
+                project_path, status, total_findings, findings_json, errors_json
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
                 project_path,
                 result["status"],
                 result["total_findings"],
                 json.dumps(result["findings"]),
+                json.dumps(result.get("errors", [])),
             ),
         )
         return cursor.lastrowid
@@ -64,6 +74,7 @@ def get_scan_history(limit=20):
     for row in rows:
         item = dict(row)
         item["findings"] = json.loads(item.pop("findings_json"))
+        item["errors"] = json.loads(item.pop("errors_json"))
         history.append(item)
 
     return history

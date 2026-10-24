@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { refreshHistoryAfterFailedScan } from "./scanHistoryRefresh.js";
 import "./styles.css";
 
 const CONFIGURED_API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
@@ -49,7 +50,9 @@ async function request(path, options = {}) {
     } catch {
       // Keep the useful HTTP error when the API did not return JSON.
     }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
 
   return response.json();
@@ -116,6 +119,7 @@ function App() {
   const [scanPath, setScanPath] = useState("");
   const [scanState, setScanState] = useState("idle");
   const [scanMessage, setScanMessage] = useState("");
+  const [historyRefreshState, setHistoryRefreshState] = useState("idle");
   const [severityFilter, setSeverityFilter] = useState("ALL");
   const [languageFilter, setLanguageFilter] = useState("ALL");
   const [selectedScanId, setSelectedScanId] = useState("ALL");
@@ -193,23 +197,51 @@ function App() {
 
     setScanState("loading");
     setScanMessage("Scanning project files. This may take a moment.");
+    setHistoryRefreshState("idle");
     try {
       const result = await request("/scan", {
         method: "POST",
         body: JSON.stringify({ project_path: projectPath }),
       });
-      const refreshedData = await loadDashboard(true);
-      const latestScan = refreshedData.history?.scans?.[0];
-      if (latestScan) {
-        setSelectedScanId(String(latestScan.id));
-      }
       setSeverityFilter("ALL");
       setLanguageFilter("ALL");
-      setScanState("success");
-      setScanMessage(`Scan completed with ${formatNumber(result.total_findings)} finding${result.total_findings === 1 ? "" : "s"}.`);
+      const status = result.status || "failed";
+      if (status === "completed") {
+        const refreshedData = await loadDashboard(true);
+        const latestScan = refreshedData.history?.scans?.[0];
+        if (latestScan) {
+          setSelectedScanId(String(latestScan.id));
+        }
+        setScanState("success");
+        setScanMessage(`Scan completed with ${formatNumber(result.total_findings)} finding${result.total_findings === 1 ? "" : "s"}.`);
+      } else {
+        await refreshHistoryAfterFailedScan({
+          loadHistory: () => request("/history?limit=20"),
+          onHistory: (history) => {
+            setData((current) => ({ ...current, history }));
+            const latestScan = history.scans?.[0];
+            if (latestScan) setSelectedScanId(String(latestScan.id));
+          },
+          onState: setHistoryRefreshState,
+        });
+        setScanState(status === "partial" ? "partial" : "error");
+        const errors = (result.errors || []).map((error) => error.message).filter(Boolean);
+        setScanMessage(
+          `${status === "partial" ? "Scan partially completed" : "Scan failed"}; ${formatNumber(result.total_findings)} finding${result.total_findings === 1 ? "" : "s"} collected.${errors.length ? ` ${errors.join(" ")}` : ""}`,
+        );
+      }
     } catch (error) {
       setScanState("error");
       setScanMessage(error.message);
+      await refreshHistoryAfterFailedScan({
+        loadHistory: () => request("/history?limit=20"),
+        onHistory: (history) => {
+          setData((current) => ({ ...current, history }));
+          const latestScan = history.scans?.[0];
+          if (latestScan) setSelectedScanId(String(latestScan.id));
+        },
+        onState: setHistoryRefreshState,
+      });
     }
   }
 
@@ -280,6 +312,7 @@ function App() {
               <button className="button button-primary" type="submit" disabled={scanState === "loading"}>{scanState === "loading" ? <><span className="button-spinner" />Scanning</> : <>Scan project <Icon name="arrow" size={15} /></>}</button>
             </form>
             {scanState !== "idle" && <div className={`scan-feedback feedback-${scanState}`} role={scanState === "error" ? "alert" : "status"}><span className="feedback-icon">{scanState === "success" ? "✓" : scanState === "error" ? "!" : "·"}</span>{scanMessage}</div>}
+            {historyRefreshState !== "idle" && <div className={`history-refresh-status history-${historyRefreshState}`} role={historyRefreshState === "stale" ? "alert" : "status"}>{historyRefreshState === "refreshing" ? "Refreshing scan history…" : historyRefreshState === "refreshed" ? "Scan history refreshed." : "Scan history could not be refreshed; displayed history may be stale. Use Refresh data to retry."}</div>}
           </section>
 
           <section className="table-section" aria-labelledby="watcher-title">
@@ -287,7 +320,7 @@ function App() {
               <div><h2 id="watcher-title">Live file watcher</h2><p>Latest findings from a changed source file in the watched demo directory.</p></div>
               <StatusBadge status={watcherData.status ? (watcherData.status.running ? "running" : "stopped") : watcherData.error ? "unavailable" : "connecting"} />
             </div>
-            {watcherData.error ? <div className="api-alert" role="alert"><div><strong>Watcher data is unavailable</strong><span>{watcherData.error}</span></div></div> : <>
+            {watcherData.error ? <div className="api-alert" role="alert"><div><strong>Watcher data is unavailable</strong><span>{watcherData.error}</span></div></div> : watcherData.findings?.error ? <div className="api-alert" role="alert"><div><strong>Latest file scan failed</strong><span>{watcherData.findings.error}</span></div></div> : <>
               <div className="findings-context"><span>Last file</span><strong title={watcherData.findings?.last_file || ""}>{watcherData.findings?.last_file ? shortPath(watcherData.findings.last_file) : "No file changes detected yet"}</strong><span>{formatNumber(watcherData.findings?.total_findings)} findings</span></div>
               <div className="table-wrap"><table><thead><tr><th>Severity</th><th>Rule ID</th><th>Line</th><th>Description</th></tr></thead><tbody>{!watcherData.findings ? <EmptyTable colSpan="4">Waiting for watcher results.</EmptyTable> : watcherData.findings.findings.length === 0 ? <EmptyTable colSpan="4">The latest changed file has no findings.</EmptyTable> : watcherData.findings.findings.map((finding, index) => <tr key={`${finding.test_id}-${finding.line_number}-${index}`}><td><span className={severityClass(finding.severity)}>{finding.severity || "Unknown"}</span></td><td><code className="rule-id">{finding.test_id || "-"}</code></td><td className="numeric-value">{finding.line_number ?? "-"}</td><td><span className="description-value">{finding.description || "No description provided."}</span></td></tr>)}</tbody></table></div>
             </>}
@@ -307,7 +340,7 @@ function App() {
 
           <section ref={findingsSectionRef} className="table-section findings-section" aria-labelledby="findings-title">
             <div className="section-heading"><div><h2 id="findings-title">Findings Explorer</h2><p>Inspect stored findings from the loaded scan history.</p></div><div className="section-tools"><label className="filter-label" htmlFor="scan-filter">Scan</label><select id="scan-filter" value={selectedScanValue} onChange={(event) => selectScan(event.target.value)} disabled={!data.history || loading}><option value="ALL">All loaded scans</option>{scans.map((scan) => <option key={scan.id} value={scan.id}>{shortPath(scan.project_path)} · {formatTimestamp(scan.created_at)}</option>)}</select><label className="filter-label" htmlFor="severity-filter">Severity</label><select id="severity-filter" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)} disabled={!data.history || loading}><option value="ALL">All severities</option><option value="HIGH">High</option><option value="CRITICAL">Critical</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option></select>{languageFilterSupported && <><label className="filter-label" htmlFor="language-filter">Language</label><select id="language-filter" value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)} disabled={!data.history || loading}><option value="ALL">All languages</option>{languages.map((language) => <option key={language} value={language}>{language}</option>)}</select></>}<span className="table-count">{data.history ? `${formatNumber(findings.length)} of ${formatNumber(scopedFindings.length)}` : "--"}</span></div></div>
-            {selectedScan && <div className="findings-context"><span>Selected historical scan</span><strong title={selectedScan.project_path}>{shortPath(selectedScan.project_path)}</strong><span>{formatTimestamp(selectedScan.created_at)} · {formatNumber(selectedScan.total_findings)} stored findings</span></div>}
+            {selectedScan && <><div className="findings-context"><span>Selected historical scan</span><strong title={selectedScan.project_path}>{shortPath(selectedScan.project_path)}</strong><span>{formatTimestamp(selectedScan.created_at)} · {formatNumber(selectedScan.total_findings)} stored findings</span></div>{selectedScan.errors?.length > 0 && <div className="api-alert" role="alert"><div><strong>Scan was {selectedScan.status}</strong>{selectedScan.errors.map((error, index) => <span key={`${error.path}-${index}`}>{error.message}</span>)}</div></div>}</>}
             <div className="table-wrap"><table className="findings-table"><thead><tr><th>Severity</th><th>Language</th><th>Rule ID</th><th>File</th><th>Line</th><th>Confidence</th><th>Description</th></tr></thead><tbody>{loading ? <><tr><td colSpan="7"><div className="table-skeleton" /></td></tr><tr><td colSpan="7"><div className="table-skeleton short" /></td></tr></> : !data.history ? <EmptyTable colSpan="7">Finding data could not be loaded because scan history is unavailable.</EmptyTable> : findings.length === 0 ? <EmptyTable colSpan="7">{selectedScan ? "No findings are stored for this scan or the filters match no findings." : "No findings match the selected filters."}</EmptyTable> : findings.map((finding, index) => <tr key={`${finding.test_id}-${finding.filename}-${finding.line_number}-${index}`}><td><span className={severityClass(finding.severity)}>{finding.severity || "Unknown"}</span></td><td><span className="language-value">{finding.language || "Unknown"}</span></td><td><code className="rule-id">{finding.test_id || "-"}</code></td><td><span className="file-value" title={finding.filename}>{shortPath(finding.filename)}</span></td><td className="numeric-value">{finding.line_number ?? "-"}</td><td><span className="confidence-value">{finding.confidence || "Unknown"}</span></td><td><span className="description-value">{finding.description || "No description provided."}</span></td></tr>)}</tbody></table></div>
           </section>
 

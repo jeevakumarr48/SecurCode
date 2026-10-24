@@ -1,8 +1,9 @@
 
-from pathlib import Path
+import logging
+from pathlib import Path, PureWindowsPath
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from database import (
     initialize_database,
@@ -14,6 +15,7 @@ from security_engine.scanner.engine import scan_project
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Initialize the local SQLite database.
 initialize_database()
@@ -23,8 +25,52 @@ initialize_database()
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 
 
+def workspace_relative_path(value):
+    """Return a workspace-relative path or a stable redaction marker."""
+    raw_path = str(value)
+    windows_path = PureWindowsPath(raw_path)
+    path = Path(raw_path)
+    if windows_path.is_absolute() and not path.is_absolute():
+        return "<outside-workspace>"
+    if not path.is_absolute() and "\\" in raw_path:
+        if ".." in windows_path.parts:
+            return "<outside-workspace>"
+        path = Path(*windows_path.parts)
+    candidate = path if path.is_absolute() else WORKSPACE_ROOT / path
+    try:
+        relative_path = candidate.resolve(strict=False).relative_to(WORKSPACE_ROOT)
+    except (OSError, RuntimeError, ValueError):
+        return "<outside-workspace>"
+    return relative_path.as_posix() or "."
+
+
+def _public_scan_result(result):
+    public_result = {
+        **result,
+        "findings": [
+            {
+                **finding,
+                "filename": workspace_relative_path(finding["filename"])
+                if finding.get("filename")
+                else finding.get("filename"),
+            }
+            for finding in result.get("findings", [])
+        ],
+        "errors": [
+            {
+                **error,
+                "path": workspace_relative_path(error["path"])
+                if error.get("path")
+                else error.get("path"),
+            }
+            for error in result.get("errors", [])
+        ],
+    }
+    return public_result
+
+
 class ScanRequest(BaseModel):
-    project_path: str = Field(min_length=1, max_length=500)
+    project_path: str
 
 
 @router.get("/status")
@@ -37,6 +83,12 @@ def status():
 
 @router.post("/scan")
 def scan(request: ScanRequest):
+    if not request.project_path or len(request.project_path) > 500:
+        raise HTTPException(
+            status_code=400,
+            detail="Project path must contain between 1 and 500 characters.",
+        )
+
     requested_path = Path(request.project_path)
 
     # Reject absolute paths and directory traversal.
@@ -63,14 +115,41 @@ def scan(request: ScanRequest):
 
     try:
         result = scan_project(str(target_path))
-        save_scan(str(target_path), result)
-        return result
-
     except Exception:
+        logger.exception("Unexpected scan failure for %s", target_path)
+        failed_result = {
+            "status": "failed",
+            "total_findings": 0,
+            "findings": [],
+            "errors": [{
+                "path": str(target_path),
+                "message": "Scan failed due to an unexpected scanner error.",
+            }],
+        }
+        public_failed_result = _public_scan_result(failed_result)
+        try:
+            save_scan(workspace_relative_path(target_path), public_failed_result)
+        except Exception:
+            logger.exception("Unable to persist failed scan history for %s", target_path)
+            raise HTTPException(
+                status_code=500,
+                detail="The scan failed and its failure could not be recorded in history.",
+            ) from None
         raise HTTPException(
             status_code=500,
-            detail="The security scan failed. Check the backend logs.",
-        )
+            detail="The security scan failed. The failure was recorded in scan history.",
+        ) from None
+
+    public_result = _public_scan_result(result)
+    try:
+        save_scan(workspace_relative_path(target_path), public_result)
+    except Exception:
+        logger.exception("Unable to persist scan history for %s", target_path)
+        raise HTTPException(
+            status_code=500,
+            detail="The scan result could not be recorded in history.",
+        ) from None
+    return public_result
 
 
 @router.get("/history")
@@ -82,6 +161,11 @@ def scan_history(limit: int = 20):
         )
 
     scans = get_scan_history(limit)
+    for item in scans:
+        item["project_path"] = workspace_relative_path(item["project_path"])
+        public_result = _public_scan_result(item)
+        item["findings"] = public_result["findings"]
+        item["errors"] = public_result["errors"]
 
     return {
         "total": len(scans),
@@ -91,4 +175,10 @@ def scan_history(limit: int = 20):
 
 @router.get("/stats")
 def scan_statistics():
-    return get_scan_statistics()
+    statistics = get_scan_statistics()
+    latest_scan = statistics.get("latest_scan")
+    if latest_scan:
+        latest_scan["project_path"] = workspace_relative_path(
+            latest_scan["project_path"]
+        )
+    return statistics

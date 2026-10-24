@@ -6,7 +6,7 @@ from threading import Lock
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import router
+from app.api.routes import router, workspace_relative_path
 from security_engine.scanner.watcher import SourceFileWatcher
 
 
@@ -22,6 +22,7 @@ watcher_state = {
     "running": False,
     "last_file": None,
     "last_findings": [],
+    "last_error": None,
 }
 watcher_lock = Lock()
 watcher = None
@@ -32,6 +33,17 @@ def handle_file_change(filename, findings):
     with watcher_lock:
         watcher_state["last_file"] = str(filename)
         watcher_state["last_findings"] = findings
+        watcher_state["last_error"] = None
+
+
+def handle_file_scan_error(filename, error):
+    """Expose watcher failures without presenting them as clean results."""
+    with watcher_lock:
+        watcher_state["last_file"] = str(filename)
+        watcher_state["last_findings"] = []
+        watcher_state["last_error"] = (
+            f"Source file scan failed ({type(error).__name__})."
+        )
 
 
 @asynccontextmanager
@@ -41,6 +53,7 @@ async def lifespan(app: FastAPI):
     watcher = SourceFileWatcher(
         root=BACKEND_DIR,
         on_change=handle_file_change,
+        on_error=handle_file_scan_error,
         interval=1.0,
         debounce=0.5,
     )
@@ -92,8 +105,13 @@ def get_watcher_status():
     with watcher_lock:
         return {
             "running": watcher_state["running"],
-            "last_file": watcher_state["last_file"],
+            "last_file": (
+                workspace_relative_path(watcher_state["last_file"])
+                if watcher_state["last_file"]
+                else None
+            ),
             "last_findings_count": len(watcher_state["last_findings"]),
+            "last_error": watcher_state["last_error"],
         }
 
 
@@ -101,7 +119,12 @@ def get_watcher_status():
 def get_watcher_findings():
     with watcher_lock:
         return {
-            "last_file": watcher_state["last_file"],
+            "last_file": (
+                workspace_relative_path(watcher_state["last_file"])
+                if watcher_state["last_file"]
+                else None
+            ),
             "total_findings": len(watcher_state["last_findings"]),
             "findings": watcher_state["last_findings"],
+            "error": watcher_state["last_error"],
         }

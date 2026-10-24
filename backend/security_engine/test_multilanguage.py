@@ -86,13 +86,22 @@ def test_safe_javascript_and_malformed_sources_do_not_crash(tmp_path):
     assert isinstance(scan_file(malformed_path), list)
 
 
-def test_unreadable_python_source_is_skipped(monkeypatch):
+def test_unreadable_python_source_fails_project_scan(monkeypatch, tmp_path):
+    path = write_source(tmp_path, "blocked.py", "value = 1\n")
+
     def deny_open(*_args, **_kwargs):
         raise PermissionError("access denied")
 
     monkeypatch.setattr("builtins.open", deny_open)
 
-    assert scan_file("blocked.py") == []
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "failed"
+    assert result["total_findings"] == 0
+    assert result["errors"] == [{
+        "path": path,
+        "message": "Source file scan failed (PermissionError).",
+    }]
 
 
 def test_project_scan_discovers_supported_files_and_skips_generated_dependencies(tmp_path):
@@ -123,4 +132,100 @@ def test_project_scan_does_not_follow_symlinked_source(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("Symlink creation is not available in this Windows environment")
 
-    assert scan_project(str(tmp_path))["findings"] == []
+    result = scan_project(str(tmp_path))
+
+    assert result["findings"] == []
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "path": str(symlink),
+        "message": "Symbolic link source file was not scanned.",
+    }]
+
+
+def test_project_scan_reports_directory_traversal_errors(monkeypatch, tmp_path):
+    def failed_walk(path, followlinks, onerror):
+        onerror(PermissionError(13, "access denied", str(path / "restricted")))
+        yield str(path), [], []
+
+    monkeypatch.setattr("security_engine.scanner.engine.os.walk", failed_walk)
+
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "path": str(tmp_path / "restricted"),
+        "message": "Directory traversal failed (PermissionError).",
+    }]
+
+
+def test_project_scan_reports_decoding_errors(tmp_path):
+    (tmp_path / "invalid.js").write_bytes(b"\xff")
+
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["message"] == (
+        "Source file scan failed (UnicodeDecodeError)."
+    )
+
+
+def test_project_scan_reports_python_parser_errors(tmp_path):
+    write_source(tmp_path, "invalid.py", "def broken(:\n")
+
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["message"] == (
+        "Source file scan failed (SyntaxError)."
+    )
+
+
+def test_project_scan_reports_unexpected_scanner_errors(monkeypatch, tmp_path):
+    write_source(tmp_path, "source.py", "value = 1\n")
+
+    def fail_scan(_filename):
+        raise RuntimeError("scanner failure")
+
+    monkeypatch.setattr("security_engine.scanner.engine._scan_source_file", fail_scan)
+
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "failed"
+    assert result["errors"][0]["message"] == (
+        "Source file scan failed (RuntimeError)."
+    )
+
+
+def test_project_scan_marks_mixed_success_and_failure_partial(tmp_path):
+    write_source(tmp_path, "safe.py", "value = 1\n")
+    write_source(tmp_path, "invalid.py", "def broken(:\n")
+
+    result = scan_project(str(tmp_path))
+
+    assert result["status"] == "partial"
+    assert result["errors"][0]["message"] == (
+        "Source file scan failed (SyntaxError)."
+    )
+
+
+def test_project_scan_does_not_report_missing_target_as_clean(tmp_path):
+    result = scan_project(str(tmp_path / "missing"))
+
+    assert result["status"] == "failed"
+    assert result["total_findings"] == 0
+    assert result["errors"][0]["message"] == (
+        "Source discovery failed (FileNotFoundError)."
+    )
+
+
+def test_project_scan_rejects_unsupported_target_file(tmp_path):
+    target = tmp_path / "notes.txt"
+    target.write_text("not source code\n", encoding="utf-8")
+
+    result = scan_project(str(target))
+
+    assert result["status"] == "failed"
+    assert result["errors"] == [{
+        "path": str(target),
+        "message": "Target file extension is not supported.",
+    }]

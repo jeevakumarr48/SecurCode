@@ -1,4 +1,5 @@
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -12,6 +13,8 @@ from .engine import (
     scan_file,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class SourceFileWatcher:
     """Lightweight polling watcher for supported source files."""
@@ -22,9 +25,11 @@ class SourceFileWatcher:
         on_change: Callable[[Path, list], None],
         interval: float = 1.0,
         debounce: float = 0.5,
+        on_error: Callable[[Path, Exception], None] | None = None,
     ):
         self.root = Path(root).resolve()
         self.on_change = on_change
+        self.on_error = on_error
         self.interval = max(0.2, interval)
         self.debounce = max(0.1, debounce)
         self._stop_event = Event()
@@ -35,10 +40,14 @@ class SourceFileWatcher:
         snapshot = {}
 
         if not self.root.is_dir():
+            self._notify_error(
+                self.root,
+                FileNotFoundError(f"Watcher root is unavailable: {self.root}"),
+            )
             return snapshot
 
         for directory, directories, filenames in os.walk(
-            self.root, followlinks=False
+            self.root, followlinks=False, onerror=self._on_walk_error
         ):
             current = Path(directory)
             directories[:] = [
@@ -61,16 +70,40 @@ class SourceFileWatcher:
                 try:
                     stat = path.stat()
                     snapshot[str(path)] = (stat.st_mtime_ns, stat.st_size)
-                except OSError:
-                    continue
+                except OSError as error:
+                    self._notify_error(path, error)
 
         return snapshot
 
+    def _on_walk_error(self, error):
+        self._notify_error(
+            Path(error.filename) if error.filename else self.root,
+            error,
+        )
+
+    def _notify_error(self, path, error):
+        logger.warning(
+            "Watcher could not inspect %s (%s)",
+            path,
+            type(error).__name__,
+        )
+        if self.on_error:
+            try:
+                self.on_error(path, error)
+            except Exception:
+                logger.exception("Watcher error handler failed for %s", path)
+
     def _scan_and_notify(self, path):
         try:
-            self.on_change(path, scan_file(path))
-        except (OSError, UnicodeError) as error:
-            print(f"SecurCode could not scan {path}: {error}")
+            findings = scan_file(path)
+        except Exception as error:
+            self._notify_error(path, error)
+            return
+
+        try:
+            self.on_change(path, findings)
+        except Exception:
+            logger.exception("Watcher change handler failed for %s", path)
 
     
     def _run(self):

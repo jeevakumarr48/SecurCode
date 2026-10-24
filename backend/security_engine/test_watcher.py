@@ -1,6 +1,7 @@
 from pathlib import Path
 from threading import Event
 
+import security_engine.scanner.watcher as watcher_module
 from security_engine.scanner.watcher import SourceFileWatcher
 
 
@@ -39,3 +40,47 @@ def test_watcher_reports_file_modifications_and_clears_stale_findings(tmp_path):
         assert findings == []
     finally:
         watcher.stop()
+
+
+def test_watcher_reports_scan_error_without_clean_update(monkeypatch, tmp_path):
+    source = tmp_path / "invalid.py"
+    source.write_text("def broken(:\n", encoding="utf-8")
+    updates = []
+    errors = []
+    watcher = SourceFileWatcher(
+        root=tmp_path,
+        on_change=lambda filename, findings: updates.append((filename, findings)),
+        on_error=lambda filename, error: errors.append((filename, error)),
+    )
+    def fail_scan(*_args, **_kwargs):
+        raise SyntaxError("invalid")
+
+    monkeypatch.setattr(watcher_module, "scan_file", fail_scan)
+
+    watcher._scan_and_notify(source)
+
+    assert updates == []
+    assert errors[0][0] == source
+    assert isinstance(errors[0][1], SyntaxError)
+
+
+def test_watcher_contains_unexpected_scan_errors(monkeypatch, tmp_path):
+    source = tmp_path / "unexpected.py"
+    updates = []
+    errors = []
+    watcher = SourceFileWatcher(
+        root=tmp_path,
+        on_change=lambda filename, findings: updates.append((filename, findings)),
+        on_error=lambda filename, error: errors.append((filename, error)),
+    )
+
+    def fail_scan(*_args, **_kwargs):
+        raise RuntimeError("scanner failure")
+
+    monkeypatch.setattr(watcher_module, "scan_file", fail_scan)
+
+    watcher._scan_and_notify(source)
+
+    assert updates == []
+    assert errors[0][0] == source
+    assert isinstance(errors[0][1], RuntimeError)
