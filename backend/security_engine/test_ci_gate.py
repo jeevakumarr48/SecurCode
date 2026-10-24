@@ -97,7 +97,10 @@ def test_ci_gate_fails_closed_for_python_syntax_errors(tmp_path):
         evaluate_files([malformed.name], repository=tmp_path)
 
 
-def test_changed_files_include_edits_and_additions_but_not_deletions(tmp_path):
+def test_changed_files_include_edits_and_additions_but_not_deletions(
+    monkeypatch,
+    tmp_path,
+):
     def git(*args):
         return subprocess.run(
             ["git", *args],
@@ -123,6 +126,13 @@ def test_changed_files_include_edits_and_additions_but_not_deletions(tmp_path):
     git("add", "-A")
     git("commit", "-qm", "source changes")
 
+    original_run = subprocess.run
+
+    def run_without_inherited_stdin(*args, **kwargs):
+        kwargs.setdefault("stdin", subprocess.DEVNULL)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(ci_gate.subprocess, "run", run_without_inherited_stdin)
     changed = _changed_files(base_sha, tmp_path)
 
     assert changed == [Path("changed.py"), Path("notes.txt")]
