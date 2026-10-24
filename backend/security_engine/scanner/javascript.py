@@ -40,7 +40,7 @@ def _looks_like_real_secret(value):
     } and not normalized.startswith("your_")
 
 
-def scan_javascript_file(filename):
+def scan_javascript_file(filename, strict=False):
     extension = Path(filename).suffix.lower()
     if extension not in JAVASCRIPT_EXTENSIONS | TYPESCRIPT_EXTENSIONS:
         return []
@@ -51,6 +51,8 @@ def scan_javascript_file(filename):
         with open(filename, "r", encoding="utf-8") as file:
             lines = file.readlines()
     except (OSError, UnicodeDecodeError):
+        if strict:
+            raise
         return []
 
     findings = []

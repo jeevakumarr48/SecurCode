@@ -34,17 +34,17 @@ SKIPPED_DIRECTORIES = {
 SKIPPED_SUFFIXES = {".map"}
 
 
-def scan_file(filename):
+def scan_file(filename, strict=False):
     """Scan one supported source file through the language router."""
-    return _scan_source_file(str(filename))
+    return _scan_source_file(str(filename), strict=strict)
 
 
-def _scan_source_file(filename):
+def _scan_source_file(filename, strict=False):
     extension = Path(filename).suffix.lower()
     if extension == ".py":
-        return scan_python_file(filename)
+        return scan_python_file(filename, strict=strict)
     if extension in JAVASCRIPT_EXTENSIONS | TYPESCRIPT_EXTENSIONS:
-        return scan_javascript_file(filename)
+        return scan_javascript_file(filename, strict=strict)
     return []
 
 
