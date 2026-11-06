@@ -1,0 +1,276 @@
+{
+  "benchmark": "SecurCode built-in scanner fixture benchmark",
+  "scope_note": "Small hand-curated source fixtures, including a JavaScript child_process.exec alias case; not a representative estimate of real-world precision or recall.",
+  "fixture_count": 12,
+  "overall": {
+    "tp": 15,
+    "fp": 0,
+    "fn": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "by_language": {
+    "JavaScript": {
+      "tp": 6,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "Python": {
+      "tp": 9,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "by_rule": {
+    "JSSEC001": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "JSSEC003": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "JSSEC005": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "PYSEC004": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "PYSEC007": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "PYSEC008": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "PYSEC010": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "SEC002": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "cases": [
+    {
+      "language": "Python",
+      "fixture": "python/vulnerable.py",
+      "expected_rules": [
+        "PYSEC004",
+        "PYSEC007",
+        "PYSEC008",
+        "PYSEC010",
+        "SEC002"
+      ],
+      "detected_rules": [
+        "PYSEC004",
+        "PYSEC007",
+        "PYSEC008",
+        "PYSEC010",
+        "SEC002"
+      ],
+      "true_positives": [
+        "PYSEC004",
+        "PYSEC007",
+        "PYSEC008",
+        "PYSEC010",
+        "SEC002"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "Python",
+      "fixture": "python/safe.py",
+      "expected_rules": [],
+      "detected_rules": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "Python",
+      "fixture": "python/sanitized.py",
+      "expected_rules": [],
+      "detected_rules": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "Python",
+      "fixture": "python/alias_interprocedural.py",
+      "expected_rules": [
+        "PYSEC007"
+      ],
+      "detected_rules": [
+        "PYSEC007"
+      ],
+      "true_positives": [
+        "PYSEC007"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "Python",
+      "fixture": "python/interprocedural_command.py",
+      "expected_rules": [
+        "PYSEC008",
+        "SEC002"
+      ],
+      "detected_rules": [
+        "PYSEC008",
+        "SEC002"
+      ],
+      "true_positives": [
+        "PYSEC008",
+        "SEC002"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "Python",
+      "fixture": "python/multiline_ssrf.py",
+      "expected_rules": [
+        "PYSEC010"
+      ],
+      "detected_rules": [
+        "PYSEC010"
+      ],
+      "true_positives": [
+        "PYSEC010"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/vulnerable.js",
+      "expected_rules": [
+        "JSSEC001",
+        "JSSEC003",
+        "JSSEC005"
+      ],
+      "detected_rules": [
+        "JSSEC001",
+        "JSSEC003",
+        "JSSEC005"
+      ],
+      "true_positives": [
+        "JSSEC001",
+        "JSSEC003",
+        "JSSEC005"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/multiline.js",
+      "expected_rules": [
+        "JSSEC001"
+      ],
+      "detected_rules": [
+        "JSSEC001"
+      ],
+      "true_positives": [
+        "JSSEC001"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/interprocedural.js",
+      "expected_rules": [
+        "JSSEC001"
+      ],
+      "detected_rules": [
+        "JSSEC001"
+      ],
+      "true_positives": [
+        "JSSEC001"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/alias.js",
+      "expected_rules": [
+        "JSSEC003"
+      ],
+      "detected_rules": [
+        "JSSEC003"
+      ],
+      "true_positives": [
+        "JSSEC003"
+      ],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/safe.js",
+      "expected_rules": [],
+      "detected_rules": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": []
+    },
+    {
+      "language": "JavaScript",
+      "fixture": "javascript/sanitized.js",
+      "expected_rules": [],
+      "detected_rules": [],
+      "true_positives": [],
+      "false_positives": [],
+      "false_negatives": []
+    }
+  ]
+}

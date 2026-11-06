@@ -1,7 +1,9 @@
 import logging
 import os
 import stat
+from time import monotonic
 from pathlib import Path
+from config import settings
 
 from .javascript import (
     JAVASCRIPT_EXTENSIONS,
@@ -44,6 +46,8 @@ def scan_file(filename):
 
 def _scan_source_file(filename):
     extension = Path(filename).suffix.lower()
+    if Path(filename).stat().st_size > settings.max_source_file_bytes:
+        raise ValueError("Source file exceeds the configured size limit.")
     if extension == ".py":
         return scan_python_file(filename)
     if extension in JAVASCRIPT_EXTENSIONS | TYPESCRIPT_EXTENSIONS:
@@ -57,8 +61,9 @@ def _should_skip_file(filename):
 
 
 def _source_files(path, errors):
+    max_depth = getattr(settings, "max_scan_depth", 30)
     if path.is_symlink():
-        logger.warning("Symbolic link scan target was not scanned: %s", path)
+        logger.warning("Symbolic link scan target was not scanned.")
         errors.append({
             "path": str(path),
             "message": "Symbolic link target was not scanned.",
@@ -89,8 +94,7 @@ def _source_files(path, errors):
             "message": f"Directory traversal failed ({type(error).__name__}).",
         })
         logger.warning(
-            "Unable to traverse source directory %s (%s)",
-            error.filename or path,
+            "Unable to traverse source directory (%s)",
             type(error).__name__,
         )
 
@@ -98,13 +102,25 @@ def _source_files(path, errors):
         path, followlinks=False, onerror=record_walk_error
     ):
         root_path = Path(root)
+        try:
+            depth = len(root_path.relative_to(path).parts)
+        except ValueError:
+            depth = max_depth
+        if depth >= max_depth:
+            for directory in directories:
+                errors.append({
+                    "path": str(root_path / directory),
+                    "message": f"Directory depth limit ({max_depth}) reached; subtree was not scanned.",
+                })
+            directories[:] = []
+            continue
         traversable_directories = []
         for directory in directories:
             candidate = root_path / directory
             if directory in SKIPPED_DIRECTORIES:
                 continue
             if candidate.is_symlink():
-                logger.warning("Symbolic link directory was not scanned: %s", candidate)
+                logger.warning("Symbolic link directory was not scanned.")
                 errors.append({
                     "path": str(candidate),
                     "message": "Symbolic link directory was not scanned.",
@@ -119,10 +135,7 @@ def _source_files(path, errors):
                     candidate.suffix.lower() in SUPPORTED_EXTENSIONS
                     and not _should_skip_file(candidate)
                 ):
-                    logger.warning(
-                        "Symbolic link source file was not scanned: %s",
-                        candidate,
-                    )
+                    logger.warning("Symbolic link source file was not scanned.")
                     errors.append({
                         "path": str(candidate),
                         "message": "Symbolic link source file was not scanned.",
@@ -141,10 +154,40 @@ def scan_project(path):
     seen = set()
     errors = []
     scanned_files = 0
+    discovered_files = 0
+    scanned_bytes = 0
+    scan_started = monotonic()
+    max_scan_seconds = getattr(settings, "max_scan_seconds", 120)
 
     try:
         for filename in _source_files(target, errors):
+            if monotonic() - scan_started >= max_scan_seconds:
+                errors.append({
+                    "path": str(filename),
+                    "message": f"Scan stopped after reaching the {max_scan_seconds}-second time limit.",
+                })
+                break
+            discovered_files += 1
+            if discovered_files > settings.max_scan_files:
+                errors.append({
+                    "path": str(filename),
+                    "message": f"Scan stopped after reaching the {settings.max_scan_files}-file limit.",
+                })
+                break
             try:
+                file_size = filename.stat().st_size
+                if file_size > settings.max_source_file_bytes:
+                    errors.append({
+                        "path": str(filename),
+                        "message": f"Source file exceeds the {settings.max_source_file_bytes}-byte size limit.",
+                    })
+                    continue
+                if scanned_bytes + file_size > settings.max_scan_bytes:
+                    errors.append({
+                        "path": str(filename),
+                        "message": f"Scan stopped after reaching the {settings.max_scan_bytes}-byte total limit.",
+                    })
+                    break
                 file_findings = _scan_source_file(str(filename))
             except Exception as error:
                 errors.append({
@@ -152,13 +195,13 @@ def scan_project(path):
                     "message": f"Source file scan failed ({type(error).__name__}).",
                 })
                 logger.warning(
-                    "Unable to scan source file %s (%s)",
-                    filename,
+                    "Unable to scan source file (%s)",
                     type(error).__name__,
                 )
                 continue
 
             scanned_files += 1
+            scanned_bytes += file_size
             for finding in file_findings:
                 key = (
                     finding.get("language"),
@@ -169,14 +212,19 @@ def scan_project(path):
                 if key not in seen:
                     seen.add(key)
                     findings.append(finding)
+            if monotonic() - scan_started >= max_scan_seconds:
+                errors.append({
+                    "path": str(filename),
+                    "message": f"Scan stopped after reaching the {max_scan_seconds}-second time limit.",
+                })
+                break
     except OSError as error:
         errors.append({
             "path": str(target),
             "message": f"Source discovery failed ({type(error).__name__}).",
         })
         logger.warning(
-            "Unable to discover source files under %s (%s)",
-            target,
+            "Unable to discover source files (%s)",
             type(error).__name__,
         )
 

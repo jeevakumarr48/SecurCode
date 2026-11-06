@@ -73,6 +73,31 @@ def test_javascript_and_typescript_rules_are_detected(tmp_path):
     assert all(finding["language"] == "TypeScript" for finding in typescript_findings)
 
 
+def test_javascript_dynamic_call_detection_spans_lines(tmp_path):
+    path = write_source(tmp_path, "multiline.js", "eval\n(\n  untrustedValue\n);\n")
+
+    findings = scan_file(path)
+
+    assert [(finding["test_id"], finding["line_number"]) for finding in findings] == [("JSSEC001", 1)]
+
+
+def test_javascript_child_process_exec_alias_is_detected_without_unrelated_alias_false_positive(tmp_path):
+    path = write_source(
+        tmp_path,
+        "command_alias.js",
+        "const commandAlias = child_process.exec;\n"
+        "commandAlias(request.body.command);\n"
+        "const helperAlias = helpers.exec;\n"
+        "helperAlias(value);\n",
+    )
+
+    findings = scan_file(path)
+
+    assert [(finding["test_id"], finding["line_number"]) for finding in findings] == [
+        ("JSSEC003", 2),
+    ]
+
+
 def test_safe_javascript_and_malformed_sources_do_not_crash(tmp_path):
     safe_path = write_source(
         tmp_path,

@@ -8,6 +8,7 @@ backend/.pytest_cache/
 backend/*.db
 .env
 .env.*
+!.env.example
 
 # Frontend dependencies and build output
 frontend/node_modules/
@@ -30,11 +31,37 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*
+*.bak
+*.backup
+*.dump
+
+# Local secrets, credentials, and key material
+.secrets/
+secrets/
+.credentials/
+credentials/
+*.secret
+*.token
+*.credentials
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Frontend tooling
 frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
 
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Editor and temporary files
+*.temp
+*.swp
+*.swo
 ```

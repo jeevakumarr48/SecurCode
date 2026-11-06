@@ -32,6 +32,11 @@ Engineers work from a desktop or laptop while evaluating project directories ins
 - The API accepts relative project paths inside its workspace.
 - API base URL is configurable with `VITE_API_BASE_URL` and defaults to `http://127.0.0.1:8000`.
 - The interface must use API data and must not fabricate metrics, findings, or scan history.
+- Projects can be registered against existing workspace directories and scanned from the console.
+- Finding state is tracked across repeat scans by a location-based fingerprint; moving code can create a new identity.
+- Incidents can link to detected findings and retain status/activity history.
+- Dashboard severity and lifecycle summaries use the latest observation for each finding fingerprint; total scan findings remain historical.
+- A read-only restricted public demo is supported. Private network deployments require team authentication and authorization, which are not part of the current release.
 - Existing endpoint paths and response fields remain backward-compatible; scanner output adds the `language` field for new findings.
 
 ## Brand Commitments

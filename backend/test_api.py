@@ -3,6 +3,7 @@ import sys
 
 import pytest
 from fastapi import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,6 +15,76 @@ from backend.app import main as app_main  # noqa: E402
 
 def test_status_uses_securcode_service_name():
     assert routes.status()["service"] == "SecurCode Security Scanner"
+
+
+def test_health_check_is_ready_for_hosting_probe():
+    assert app_main.health_check()["status"] == "healthy"
+
+
+def test_production_cors_requires_an_explicit_frontend_origin(monkeypatch):
+    monkeypatch.setenv("SECURCODE_ENV", "production")
+    monkeypatch.delenv("SECURCODE_ALLOWED_ORIGINS", raising=False)
+    with pytest.raises(RuntimeError, match="SECURCODE_ALLOWED_ORIGINS"):
+        app_main._allowed_origins()
+
+
+def test_production_cors_uses_only_configured_frontend_origins(monkeypatch):
+    monkeypatch.setenv("SECURCODE_ENV", "production")
+    monkeypatch.setenv("SECURCODE_ALLOWED_ORIGINS", "https://frontend.example, https://other.example/")
+    assert app_main._allowed_origins() == ["https://frontend.example", "https://other.example"]
+
+
+def test_cors_allows_patch_for_finding_and_incident_workflows():
+    cors = next(item for item in app_main.app.user_middleware if item.cls is CORSMiddleware)
+    assert "PATCH" in cors.kwargs["allow_methods"]
+
+
+def test_production_cors_rejects_http_and_wildcard_origins(monkeypatch):
+    monkeypatch.setenv("SECURCODE_ENV", "production")
+    for origin, message in (("http://frontend.example", "HTTPS"), ("*", "exact web origins")):
+        monkeypatch.setenv("SECURCODE_ALLOWED_ORIGINS", origin)
+        with pytest.raises(RuntimeError, match=message):
+            app_main._allowed_origins()
+
+
+def test_public_demo_mode_rejects_workspace_paths_outside_samples(tmp_path, monkeypatch):
+    (tmp_path / "private.py").write_text("eval(input)\n", encoding="utf-8")
+    monkeypatch.setattr(routes, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(routes, "DEMO_MODE", True)
+    with pytest.raises(HTTPException) as error:
+        routes.scan(routes.ScanRequest(project_path="private.py"))
+    assert error.value.status_code == 403
+
+
+def test_scan_admission_control_rejects_concurrent_work():
+    assert routes.scan_semaphore.acquire(blocking=False)
+    try:
+        with pytest.raises(HTTPException) as error:
+            routes.scan(routes.ScanRequest(project_path="backend"))
+    finally:
+        routes.scan_semaphore.release()
+
+    assert error.value.status_code == 429
+
+
+def test_public_demo_mode_scans_bundled_sample(tmp_path, monkeypatch):
+    demo = tmp_path / routes.DEMO_RELATIVE_PATH
+    demo.mkdir(parents=True)
+    sample = demo / "vulnerable.py"
+    sample.write_text("eval(input)\n", encoding="utf-8")
+    monkeypatch.setattr(routes, "WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr(routes, "DEMO_MODE", True)
+    monkeypatch.setattr(routes, "save_scan", lambda *_args: None)
+
+    result = routes.scan(routes.ScanRequest(project_path=(routes.DEMO_RELATIVE_PATH / "vulnerable.py").as_posix()))
+
+    assert result["status"] == "completed"
+    assert result["total_findings"] == 1
+    assert result["findings"][0]["filename"].endswith("vulnerable.py")
+
+    with pytest.raises(HTTPException) as limited:
+        routes.scan(routes.ScanRequest(project_path=(routes.DEMO_RELATIVE_PATH / "vulnerable.py").as_posix()))
+    assert limited.value.status_code == 429
 
 
 def test_scan_rejects_absolute_and_traversal_paths():
@@ -426,3 +497,33 @@ def test_watcher_scan_error_is_available_as_error_not_clean_findings(monkeypatch
     assert app_main.get_watcher_findings()["error"] == (
         "Source file scan failed (SyntaxError)."
     )
+
+
+def test_watcher_findings_redact_absolute_paths_before_response(monkeypatch, tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = tmp_path / "private-user" / "source.py"
+    source.parent.mkdir()
+    source.write_text("eval(input)\n", encoding="utf-8")
+    monkeypatch.setattr(routes, "WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr(
+        app_main,
+        "watcher_state",
+        {
+            "running": True,
+            "last_file": str(source),
+            "last_findings": [{
+                "filename": str(source),
+                "test_id": "SEC001",
+                "severity": "HIGH",
+                "description": "Unsafe eval",
+            }],
+            "last_error": None,
+        },
+    )
+
+    findings = app_main.get_watcher_findings()
+
+    assert findings["last_file"] == "<outside-workspace>"
+    assert findings["findings"][0]["filename"] == "<outside-workspace>"
+    assert "private-user" not in str(findings)

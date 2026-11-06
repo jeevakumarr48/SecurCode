@@ -31,7 +31,7 @@ jobs:
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
       - name: Run backend tests
         working-directory: backend
@@ -81,4 +81,10 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend
+        env:
+          VITE_API_BASE_URL: https://api.example.invalid
         run: npm run build
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test

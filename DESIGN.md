@@ -18,7 +18,7 @@ The web platform sans stack keeps controls familiar and compact. Headings use mo
 
 ## Layout And Components
 
-The shell is a charcoal top bar, a slightly lighter charcoal left navigation rail, and a near-black content canvas with an editorial alignment system. Content sections use one-pixel rules instead of nested cards or shadows. Tables are the primary evidence surface. The scan form is an inline action section, so launching a scan does not require a modal or route change.
+The shell is a charcoal top bar, a slightly lighter charcoal left navigation rail, and a near-black content canvas with an editorial alignment system. Navigation covers overview, projects, scans, vulnerabilities, incidents, audit logs, reports, and settings. Content sections use one-pixel rules instead of nested cards or shadows. Tables are the primary evidence surface. Scan and project forms are inline actions, so launching work does not require a modal or route change.
 
 ## States And Responsive Behavior
 
