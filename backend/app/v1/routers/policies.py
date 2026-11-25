@@ -53,7 +53,7 @@ def put_policy(body: PolicyUpdate, ctx: OrgContext = Depends(writable_org), db: 
     audit.record(db, "policy.updated", actor=ctx.user, org_id=ctx.org.id, resource_type="policy", resource_id=policy.id,
                  metadata={"version": policy.version, "changed_keys": changed, "reason": body.reason})
     notify(db, [uid for uid in org_members_with_roles(db, ctx.org.id, {"owner", "admin", "security_admin"}) if uid != ctx.user.id],
-           "policy_changed", f"Security policy updated to v{policy.version}", body.reason, "/settings/policy", ctx.org.id)
+           "policy_changed", f"Security policy updated to v{policy.version}", body.reason, f"/orgs/{ctx.org.id}/policy", ctx.org.id)
     db.commit()
     return {"version": policy.version, "config": policy.config, "changed_keys": changed}
 

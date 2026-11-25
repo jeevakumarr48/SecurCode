@@ -150,25 +150,20 @@ def test_totp_mfa_enrolment_and_login_challenge(make_client):
 
     second = make_client()
     response = second.login("mfa@example.com")
-    assert response.json() == {"status": "mfa_required"}
+    assert response.json()["status"] == "mfa_required"
+    pending_csrf = response.json()["csrf_token"]
+    assert "user" not in response.json()
     # A pending-MFA session cannot use the API.
     assert second.get("/api/v1/organizations").status_code == 401
     code = totp_code(secret, time.time() + 30)  # next window: never the code used at enrolment
     verified = second.http.post("/api/v1/auth/mfa/verify", json={"code": code})
     assert verified.status_code == 403  # CSRF still enforced on the challenge
-    with v1_db.SessionLocal() as db:
-        pending = db.execute(select(UserSession).where(UserSession.mfa_pending.is_(True))).scalar_one()
-        csrf = pending.csrf_token
-    verified = second.http.post("/api/v1/auth/mfa/verify", json={"code": code}, headers={"X-CSRF-Token": csrf})
+    verified = second.http.post("/api/v1/auth/mfa/verify", json={"code": code}, headers={"X-CSRF-Token": pending_csrf})
     assert verified.status_code == 200, verified.text
     second.absorb(verified)
     assert second.get("/api/v1/organizations").status_code == 200
     replay = make_client()
-    replay.login("mfa@example.com")
-    with v1_db.SessionLocal() as db:
-        csrf = db.execute(
-            select(UserSession).where(UserSession.mfa_pending.is_(True), UserSession.revoked_at.is_(None))
-        ).scalar_one().csrf_token
+    csrf = replay.login("mfa@example.com").json()["csrf_token"]
     assert replay.http.post("/api/v1/auth/mfa/verify", json={"code": code}, headers={"X-CSRF-Token": csrf}).status_code == 401
 
 

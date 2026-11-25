@@ -85,6 +85,7 @@ class ApiClient:
         body = response.json()
         if body.get("csrf_token"):
             self.csrf = body["csrf_token"]
+        if "user" in body:
             self.user = body["user"]
             self.orgs = body["organizations"]
         return body

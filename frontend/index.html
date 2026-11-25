@@ -1,15 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#ffffff" />
-    <meta name="description" content="SecurCode application security operations console" />
+    <meta name="description" content="SecurCode: multi-tenant application security and vulnerability management" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>SecurCode | Application Security</title>
+    <title>SecurCode | Application Security Platform</title>
+    <script>
+      try {
+        var theme = localStorage.getItem("securcode-theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+        else if (window.matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+    <script type="module" src="/src/app/main.tsx"></script>
   </body>
 </html>

@@ -68,3 +68,7 @@ Thumbs.db
 
 # Local backups and repository snapshots
 backups/
+
+# Frontend test artefacts and development key material
+frontend/playwright-report/
+backend/.securcode-dev.key

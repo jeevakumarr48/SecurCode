@@ -318,7 +318,7 @@ def create_invitation(body: InvitationCreate, ctx: OrgContext = Depends(writable
     invitee = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if invitee:
         notify(db, [invitee.id], "invitation", f"Invitation to join {ctx.org.name}",
-               f"You were invited as {body.role.replace('_', ' ')}.", "/invitations")
+               f"You were invited as {body.role.replace('_', ' ')}. Use the link in your invitation email to join.", None)
     audit.record(db, "member.invited", actor=ctx.user, org_id=ctx.org.id, resource_type="invitation", resource_id=inv.id,
                  metadata={"email": email, "role": body.role})
     db.commit()
@@ -402,7 +402,7 @@ def accept_invitation(body: InvitationAccept, auth: AuthContext = Depends(curren
     audit.record(db, "member.joined", actor=auth.user, org_id=inv.org_id, resource_type="invitation", resource_id=inv.id,
                  metadata={"role": inv.role})
     if inv.invited_by_id:
-        notify(db, [inv.invited_by_id], "invitation", f"{auth.user.email} joined {org.name}", org_id=org.id, link="/team")
+        notify(db, [inv.invited_by_id], "invitation", f"{auth.user.email} joined {org.name}", org_id=org.id, link=f"/orgs/{org.id}/team")
     db.commit()
     return {"status": "joined", "org_id": inv.org_id, "role": inv.role}
 

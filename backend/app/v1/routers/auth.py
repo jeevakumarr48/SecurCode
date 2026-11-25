@@ -304,7 +304,9 @@ def login(body: LoginRequest, request: Request, response: Response, db: Session 
     if user.mfa_enabled:
         audit.record(db, "auth.mfa_challenge", actor=user, resource_type="user", resource_id=user.id, scope="platform")
         db.commit()
-        return {"status": "mfa_required"}
+        # The CSRF token of the short-lived pending session is needed to submit
+        # the challenge; it grants nothing without the HttpOnly cookie.
+        return {"status": "mfa_required", "csrf_token": session.csrf_token}
     user.last_login_at = now
     audit.record(db, "auth.login", actor=user, resource_type="user", resource_id=user.id, scope="platform")
     db.commit()

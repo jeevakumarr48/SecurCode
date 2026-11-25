@@ -264,4 +264,4 @@ def _queue_scan(db: Session, integration: Integration, project: Project, branch,
 
 def report_integration_problem(db: Session, integration: Integration, message: str) -> None:
     notify(db, org_members_with_roles(db, integration.org_id, {"owner", "admin"}), "integration_problem",
-           "GitHub integration needs attention", message, "/integrations", integration.org_id)
+           "GitHub integration needs attention", message, f"/orgs/{integration.org_id}/integrations", integration.org_id)
