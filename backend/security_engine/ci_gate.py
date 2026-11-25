@@ -1,6 +1,7 @@
 """Fail-closed CI gate for changed source files."""
 
 import argparse
+import fnmatch
 import os
 import subprocess
 import sys
@@ -67,10 +68,34 @@ def _changed_files(base_sha, repository):
         raise GateError("A changed filename is not valid UTF-8.") from error
 
 
+IGNORE_FILE = ".securcode-gate-ignore"
+
+
+def _ignore_patterns(repository):
+    """Glob patterns for intentionally vulnerable fixtures (see .securcode-gate-ignore)."""
+    candidate = Path(repository) / IGNORE_FILE
+    if not candidate.is_file():
+        return []
+    patterns = []
+    for line in candidate.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            if ".." in line or line.startswith("/"):
+                raise GateError(f"Invalid ignore pattern in {IGNORE_FILE}: {line!r}")
+            patterns.append(line)
+    return patterns
+
+
+def _ignored(relative_path, patterns):
+    posix = relative_path.as_posix()
+    return any(fnmatch.fnmatch(posix, pattern) for pattern in patterns)
+
+
 def evaluate_files(files, threshold=DEFAULT_THRESHOLD, repository=None):
     """Scan changed files and return findings that meet the configured threshold."""
     threshold = _severity_threshold(threshold)
     repository = Path(repository or Path.cwd()).resolve()
+    ignore = _ignore_patterns(repository)
     threshold_index = SEVERITY_LEVELS.index(threshold)
     violations = []
 
@@ -80,6 +105,9 @@ def evaluate_files(files, threshold=DEFAULT_THRESHOLD, repository=None):
             raise GateError(f"Changed file escapes the repository: {relative_path}")
 
         path = repository / relative_path
+        if _ignored(relative_path, ignore):
+            print(f"Skipping intentionally vulnerable fixture: {relative_path}")
+            continue
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             print(f"Skipping unsupported file: {relative_path}")
             continue

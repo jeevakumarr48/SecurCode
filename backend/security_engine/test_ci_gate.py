@@ -154,3 +154,27 @@ def test_changed_files_fall_back_to_tracked_files_without_base_sha(
 
     assert _changed_files(base_sha, tmp_path) == [Path("tracked.py")]
     assert captured["command"] == ["git", "ls-files", "-z"]
+
+
+def test_ignore_file_skips_only_listed_fixture_paths(tmp_path):
+    from security_engine.ci_gate import evaluate_files
+
+    (tmp_path / ".securcode-gate-ignore").write_text("# fixtures\nscanner-fixtures/**\n", encoding="utf-8")
+    fixture = tmp_path / "scanner-fixtures" / "app.py"
+    fixture.parent.mkdir()
+    fixture.write_text("import os\nos.system(input())\n", encoding="utf-8")
+    real = tmp_path / "src" / "app.py"
+    real.parent.mkdir()
+    real.write_text("import os\nos.system(input())\n", encoding="utf-8")
+    assert evaluate_files([Path("scanner-fixtures/app.py")], repository=tmp_path) == []
+    assert evaluate_files([Path("src/app.py")], repository=tmp_path)
+
+
+def test_ignore_file_rejects_traversal_patterns(tmp_path):
+    import pytest as _pytest
+
+    from security_engine.ci_gate import GateError, evaluate_files
+
+    (tmp_path / ".securcode-gate-ignore").write_text("../**\n", encoding="utf-8")
+    with _pytest.raises(GateError):
+        evaluate_files([], repository=tmp_path)

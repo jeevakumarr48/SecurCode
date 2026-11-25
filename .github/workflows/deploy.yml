@@ -1,0 +1,41 @@
+name: Deploy (manual)
+
+# Optional, manually triggered deployment. Runs only from main, only for
+# repository collaborators, and only after the protected "production"
+# environment is approved. Pull-request code can never reach these secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type "deploy" to trigger the Render deploy hooks
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main' && inputs.confirm == 'deploy'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - name: Trigger Render API and worker deploys
+        env:
+          RENDER_API_DEPLOY_HOOK: ${{ secrets.RENDER_API_DEPLOY_HOOK }}
+          RENDER_WORKER_DEPLOY_HOOK: ${{ secrets.RENDER_WORKER_DEPLOY_HOOK }}
+        run: |
+          test -n "$RENDER_API_DEPLOY_HOOK" || { echo "RENDER_API_DEPLOY_HOOK secret is not configured"; exit 1; }
+          curl -fsS -X POST "$RENDER_API_DEPLOY_HOOK" -o /dev/null
+          if [ -n "$RENDER_WORKER_DEPLOY_HOOK" ]; then curl -fsS -X POST "$RENDER_WORKER_DEPLOY_HOOK" -o /dev/null; fi
+      - name: Smoke test public deployment
+        env:
+          PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
+        run: |
+          test -n "$PUBLIC_APP_URL" || { echo "Set the PUBLIC_APP_URL repository variable"; exit 1; }
+          for i in $(seq 1 30); do
+            if curl -fsS "$PUBLIC_APP_URL/api/v1/health/ready"; then break; fi
+            sleep 20
+          done
+          curl -fsS "$PUBLIC_APP_URL/api/v1/health/ready"
+          curl -fsS "$PUBLIC_APP_URL/" -o /dev/null

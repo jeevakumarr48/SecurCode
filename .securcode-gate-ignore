@@ -1,0 +1,4 @@
+# Paths the CI security gate does not fail on.
+# Only intentionally vulnerable test fixtures belong here. Every entry is
+# reviewed like code; production code must never be listed.
+scanner-fixtures/**

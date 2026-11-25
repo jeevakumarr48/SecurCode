@@ -1,0 +1,78 @@
+# Render Blueprint for the SecurCode API and worker.
+# Review plans and regions before applying; prices and free-tier rules change.
+# Frontend: deploy frontend/ to Vercel (see docs/DEPLOYMENT-SAAS.md).
+#
+# Two supported layouts:
+#  * standard (below): API web service + dedicated background worker + Render Postgres.
+#  * low-cost: delete the worker service, set SECURCODE_EMBEDDED_WORKER=true on the API,
+#    use plan: free for the API, and point SECURCODE_DATABASE_URL at an external
+#    PostgreSQL whose free tier does not expire (Render's free Postgres expires after 30 days).
+services:
+  - type: web
+    name: securcode-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/v1/health/ready
+    autoDeploy: false
+    envVars:
+      - key: SECURCODE_ENV
+        value: production
+      - key: SECURCODE_DATABASE_URL
+        fromDatabase: { name: securcode-db, property: connectionString }
+      - key: SECURCODE_ENCRYPTION_KEY
+        sync: false          # paste a Fernet key; never commit it
+      - key: SECURCODE_PUBLIC_APP_URL
+        sync: false          # e.g. https://securcode.vercel.app
+      - key: SECURCODE_ALLOWED_ORIGINS
+        sync: false          # same value as SECURCODE_PUBLIC_APP_URL
+      - key: SECURCODE_COOKIE_SECURE
+        value: "true"
+      - key: SECURCODE_TRUST_PROXY_HEADERS
+        value: "true"
+      - key: SECURCODE_LEGACY_API
+        value: "false"
+      - key: SECURCODE_EMBEDDED_WORKER
+        value: "false"
+      - key: SECURCODE_SMTP_HOST
+        sync: false
+      - key: SECURCODE_SMTP_USERNAME
+        sync: false
+      - key: SECURCODE_SMTP_PASSWORD
+        sync: false
+      - key: SECURCODE_SMTP_FROM
+        sync: false
+
+  - type: worker
+    name: securcode-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    dockerCommand: python -m app.v1.worker
+    plan: starter
+    autoDeploy: false
+    envVars:
+      - key: SECURCODE_ENV
+        value: production
+      - key: SECURCODE_DATABASE_URL
+        fromDatabase: { name: securcode-db, property: connectionString }
+      - fromGroup: securcode-worker-secrets
+
+envVarGroups:
+  - name: securcode-worker-secrets
+    envVars:
+      - key: SECURCODE_ENCRYPTION_KEY
+        sync: false
+      - key: SECURCODE_PUBLIC_APP_URL
+        sync: false
+      - key: SECURCODE_ALLOWED_ORIGINS
+        sync: false
+      - key: SECURCODE_COOKIE_SECURE
+        value: "true"
+
+databases:
+  - name: securcode-db
+    plan: basic-256mb
+    databaseName: securcode
+    user: securcode

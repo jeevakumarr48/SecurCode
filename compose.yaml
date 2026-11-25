@@ -1,0 +1,63 @@
+# Local full stack: PostgreSQL + API + isolated scan worker + web console.
+#   cp .env.example .env   # then fill in the secrets
+#   docker compose up --build
+# Open http://localhost:8080
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: securcode
+      POSTGRES_USER: securcode
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U securcode -d securcode"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ., dockerfile: backend/Dockerfile }
+    environment: &backend-env
+      SECURCODE_ENV: ${SECURCODE_ENV:-development}
+      SECURCODE_DATABASE_URL: postgresql://securcode:${POSTGRES_PASSWORD}@db:5432/securcode
+      SECURCODE_ENCRYPTION_KEY: ${SECURCODE_ENCRYPTION_KEY:?generate a Fernet key, see .env.example}
+      SECURCODE_PUBLIC_APP_URL: ${SECURCODE_PUBLIC_APP_URL:-http://localhost:8080}
+      SECURCODE_ALLOWED_ORIGINS: ${SECURCODE_ALLOWED_ORIGINS:-http://localhost:8080}
+      SECURCODE_COOKIE_SECURE: ${SECURCODE_COOKIE_SECURE:-false}
+      SECURCODE_TRUST_PROXY_HEADERS: "true"
+      SECURCODE_SMTP_HOST: ${SECURCODE_SMTP_HOST:-}
+      SECURCODE_SMTP_USERNAME: ${SECURCODE_SMTP_USERNAME:-}
+      SECURCODE_SMTP_PASSWORD: ${SECURCODE_SMTP_PASSWORD:-}
+      SECURCODE_SMTP_FROM: ${SECURCODE_SMTP_FROM:-SecurCode <no-reply@localhost>}
+    depends_on:
+      db: { condition: service_healthy }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  worker:
+    build: { context: ., dockerfile: backend/Dockerfile }
+    command: ["sh", "-c", "sleep 5 && exec python -m app.v1.worker"]
+    environment: *backend-env
+    healthcheck:
+      disable: true
+    depends_on:
+      db: { condition: service_healthy }
+      api: { condition: service_started }
+    # The worker never needs inbound network access; scanned code is never executed.
+    read_only: true
+    tmpfs: ["/tmp:size=2g"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    mem_limit: 2g
+    pids_limit: 256
+
+  web:
+    build: { context: ., dockerfile: frontend/Dockerfile }
+    ports: ["8080:8080"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
