@@ -54,6 +54,8 @@ def test_production_application_disables_public_api_documentation(tmp_path):
         "SECURCODE_ALLOWED_ORIGINS": "https://console.example",
         "SECURCODE_DATABASE_PATH": str(tmp_path / "isolated-production.sqlite"),
         "SECURCODE_BOOTSTRAP_TOKEN": "test-only-bootstrap-token-at-least-32-chars",
+        # Single-host durable-disk SQLite remains an explicit opt-in for production.
+        "SECURCODE_ALLOW_SQLITE_IN_PRODUCTION": "true",
     })
     backend_dir = Path(__file__).resolve().parent
     result = subprocess.run(

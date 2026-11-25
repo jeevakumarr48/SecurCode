@@ -1,0 +1,14 @@
+# Lint configuration. The strict security-oriented rule set applies to the
+# multi-tenant platform code; legacy modules keep the baseline rule set.
+target-version = "py310"
+line-length = 140
+
+[lint]
+select = ["E", "F", "W", "B", "S"]
+ignore = ["E501", "S101", "S603", "S311", "B008", "S324", "S105", "S106"]
+
+[lint.per-file-ignores]
+"tests_v1/**" = ["S", "B"]
+"**/test_*.py" = ["S", "B", "E", "F", "W"]
+"security_engine/benchmark_fixtures/**" = ["ALL"]
+"app/api/docs/**" = ["ALL"]

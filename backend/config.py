@@ -29,6 +29,19 @@ def _integer(name, default, minimum, maximum):
     return value
 
 
+def legacy_api_enabled():
+    """The original single-tenant API needs the legacy SQLite file.
+
+    Enabled by default for SQLite installs (preserving existing behaviour);
+    disabled by default when SECURCODE_DATABASE_URL points at PostgreSQL.
+    """
+    raw = os.getenv("SECURCODE_LEGACY_API")
+    if raw is not None and raw.strip() != "":
+        return _boolean("SECURCODE_LEGACY_API")
+    url = os.getenv("SECURCODE_DATABASE_URL", "").strip().lower()
+    return not url or url.startswith("sqlite")
+
+
 def parse_allowed_origins():
     values = [item.strip() for item in os.getenv("SECURCODE_ALLOWED_ORIGINS", "").split(",") if item.strip()]
     normalized = []
@@ -92,7 +105,7 @@ def load_settings():
     default_database = Path(__file__).resolve().parent / "sentinelops.db"
     configured_database_path = os.getenv("SECURCODE_DATABASE_PATH")
     database_path = Path(configured_database_path if configured_database_path and configured_database_path.strip() else default_database).expanduser()
-    if environment == "production" and not demo_mode and (
+    if environment == "production" and not demo_mode and legacy_api_enabled() and (
         not configured_database_path
         or not configured_database_path.strip()
         or not Path(configured_database_path).expanduser().is_absolute()
@@ -102,7 +115,7 @@ def load_settings():
         )
     if not database_path.is_absolute():
         database_path = (Path.cwd() / database_path).resolve()
-    if environment == "production" and not demo_mode and not database_path.parent.is_dir():
+    if environment == "production" and not demo_mode and legacy_api_enabled() and not database_path.parent.is_dir():
         raise RuntimeError(
             "Private production SECURCODE_DATABASE_PATH parent must be an existing mounted directory."
         )

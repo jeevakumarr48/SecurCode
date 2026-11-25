@@ -11,19 +11,25 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router, workspace_relative_path
-from app.api.platform_routes import router as platform_router
-from app.auth import (
-    router as auth_router,
-    allowed_for_role,
-    bind_current_user,
-    get_user_for_token,
-    project_access_allowed,
-    reset_current_user,
-)
-from database import get_connection
-from config import parse_allowed_origins, settings
-from security_engine.scanner.watcher import SourceFileWatcher
+from config import legacy_api_enabled, parse_allowed_origins, settings
+from app.v1 import api as v1_api
+
+LEGACY_API_ENABLED = legacy_api_enabled()
+if LEGACY_API_ENABLED:
+    # The original single-tenant console API (SQLite only) stays available
+    # unchanged for existing users; the multi-tenant platform lives at /api/v1.
+    from app.api.routes import router, workspace_relative_path
+    from app.api.platform_routes import router as platform_router
+    from app.auth import (
+        router as auth_router,
+        allowed_for_role,
+        bind_current_user,
+        get_user_for_token,
+        project_access_allowed,
+        reset_current_user,
+    )
+    from database import get_connection
+    from security_engine.scanner.watcher import SourceFileWatcher
 
 
 # Keep the watched directory inside the backend workspace.
@@ -121,6 +127,9 @@ def handle_file_scan_error(filename, error):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global watcher
+    if not LEGACY_API_ENABLED or os.getenv("SECURCODE_DISABLE_WATCHER", "").lower() in {"1", "true", "yes"}:
+        yield
+        return
 
     watcher = SourceFileWatcher(
         root=BACKEND_DIR,
@@ -176,6 +185,13 @@ if not production:
 @app.middleware("http")
 async def authenticate_and_authorize(request: Request, call_next):
     path = request.url.path
+    if path.startswith(v1_api.API_PREFIX):
+        # /api/v1 enforces its own cookie session, CSRF and tenant authorization.
+        return await call_next(request)
+    if not LEGACY_API_ENABLED:
+        if path in {"/", "/healthz"}:
+            return await call_next(request)
+        return JSONResponse({"detail": "Not found."}, status_code=404)
     demo_mode = os.getenv("SECURCODE_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
     if demo_mode and path.startswith("/auth/"):
         return JSONResponse({"detail": "Authentication endpoints are unavailable in the public demo."}, status_code=404)
@@ -233,7 +249,7 @@ async def apply_security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
-    if request.url.path not in {"/docs", "/redoc"}:
+    if request.url.path not in {"/docs", "/redoc", "/api/v1/docs"} and "content-security-policy" not in response.headers:
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
         )
@@ -248,10 +264,13 @@ def root():
 @app.get("/healthz")
 def health_check():
     """Simple readiness endpoint for the hosting platform."""
+    from sqlalchemy import text as _text
+    from app.v1.db import engine as _engine
+
     try:
-        with get_connection() as connection:
-            connection.execute("SELECT 1")
-    except sqlite3.Error:
+        with _engine.connect() as connection:
+            connection.execute(_text("SELECT 1"))
+    except Exception:
         raise HTTPException(status_code=503, detail="The application database is unavailable.") from None
     return {
         "status": "healthy",
@@ -259,7 +278,6 @@ def health_check():
     }
 
 
-@app.get("/watcher/status")
 def get_watcher_status():
     with watcher_lock:
         return {
@@ -274,7 +292,6 @@ def get_watcher_status():
         }
 
 
-@app.get("/watcher/findings")
 def get_watcher_findings():
     with watcher_lock:
         redacted_findings = _redact_finding_paths(watcher_state["last_findings"])
@@ -288,3 +305,10 @@ def get_watcher_findings():
             "findings": redacted_findings,
             "error": watcher_state["last_error"],
         }
+
+
+if LEGACY_API_ENABLED:
+    app.get("/watcher/status")(get_watcher_status)
+    app.get("/watcher/findings")(get_watcher_findings)
+
+v1_api.install(app)

@@ -1,0 +1,174 @@
+{
+  "fixtures": [
+    "safe/js_safe_patterns.js",
+    "safe/py_safe_patterns.py",
+    "vulnerable/js_dom_node.js",
+    "vulnerable/py_crypto_tls.py",
+    "vulnerable/py_web_config.py",
+    "vulnerable/react_view.tsx"
+  ],
+  "scanner_version": "2.0.0",
+  "ruleset_version": "2.0.0+a37ba02275",
+  "true_positives": 41,
+  "false_positives": 0,
+  "false_negatives": 0,
+  "true_negatives_safe_lines": 45,
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "per_rule": {
+    "JSSEC006": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC007": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC008": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC009": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC010": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC011": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC012": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC013": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC014": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC015": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC016": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC017": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC018": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "JSSEC019": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC011": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC012": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC013": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC014": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC015": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC016": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC017": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC018": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC019": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC020": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC021": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC022": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC023": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC024": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC025": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    },
+    "PYSEC026": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0
+    }
+  },
+  "false_positive_cases": [],
+  "false_negative_cases": [],
+  "scan_errors": []
+}
