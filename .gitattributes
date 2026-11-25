@@ -1,0 +1,9 @@
+# Store text with LF in the repository; Git converts to the platform's line
+# endings on checkout (CRLF on Windows when core.autocrlf is enabled).
+* text=auto
+*.png binary
+*.db binary
+*.sqlite binary
+*.zip binary
+*.tgz binary
+*.gz binary
