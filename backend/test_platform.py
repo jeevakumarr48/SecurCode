@@ -1051,3 +1051,14 @@ def test_http_workflow_creates_project_scan_finding_incident_report_and_audit(pl
     assert sarif_body["version"] == "2.1.0"
     assert sarif_body["runs"][0]["results"][0]["ruleId"] == "PYSEC003"
     _HTTP_TEST_TOKEN = None
+
+
+def test_first_demo_scan_allowed_right_after_boot(platform_db, monkeypatch):
+    """monotonic() is small on freshly booted hosts (e.g. CI runners); the first scan must not be throttled."""
+    monkeypatch.setattr(routes, "DEMO_SCAN_COOLDOWN_SECONDS", 60)
+    monkeypatch.setattr(routes, "_last_demo_scan_at", 0.0)
+    monkeypatch.setattr(routes, "monotonic", lambda: 5.0)
+    routes._enforce_demo_scan_cooldown()
+    with pytest.raises(HTTPException) as limited:
+        routes._enforce_demo_scan_cooldown()
+    assert limited.value.status_code == 429

@@ -320,7 +320,12 @@ export function ReportsPage() {
   const org = useOrg();
   const [projectId, setProjectId] = useState("");
   const projects = useQuery({ queryKey: ["projects", org.id, "all"], queryFn: () => api.get<Page<Project>>(`/organizations/${org.id}/projects`, { limit: 200 }) });
-  const url = (kind: string) => `${API_BASE}/organizations/${org.id}/reports/${kind}${projectId ? `?project_id=${projectId}` : ""}`;
+  const url = (kind: string) => {
+    // Only a known report kind and a hex project id ever reach the link.
+    const safeKind = REPORTS.some(([k]) => k === kind) ? kind : "organization";
+    const params = /^[a-f0-9]{32}$/.test(projectId) ? `?${new URLSearchParams({ project_id: projectId })}` : "";
+    return `${API_BASE}/organizations/${encodeURIComponent(org.id)}/reports/${safeKind}${params}`;
+  };
   return (
     <>
       <PageHeader title="Reports" description="Reports open as printable pages (use your browser's Print → Save as PDF) and include scope, scanner and rule-set versions, and limitations." />

@@ -48,7 +48,8 @@ def _enforce_demo_scan_cooldown():
     global _last_demo_scan_at
     now = monotonic()
     with _demo_scan_lock:
-        if now - _last_demo_scan_at < DEMO_SCAN_COOLDOWN_SECONDS:
+        # 0.0 means "no scan yet": monotonic() can be below the cooldown right after boot.
+        if _last_demo_scan_at > 0 and now - _last_demo_scan_at < DEMO_SCAN_COOLDOWN_SECONDS:
             raise HTTPException(
                 status_code=429,
                 detail="The public demo is rate limited. Please wait a few seconds and try again.",

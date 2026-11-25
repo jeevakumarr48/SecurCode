@@ -36,6 +36,10 @@ jobs:
           languages: ${{ matrix.language }}
           queries: security-extended
           build-mode: none
+          # Intentionally vulnerable benchmark/demo fixtures are scanner test data, not application code.
+          config: |
+            paths-ignore:
+              - scanner-fixtures/**
 
       - name: Analyze and upload SARIF
         uses: github/codeql-action/analyze@v3

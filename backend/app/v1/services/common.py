@@ -61,13 +61,20 @@ class EmailResult:
         self.detail = detail
 
 
+def _single_line(value: str, limit: int = 2000) -> str:
+    return value[:limit].replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+
+
 def send_email(to: str, subject: str, body: str) -> EmailResult:
     """Send via SMTP when configured. Without SMTP, development prints the
     message to the server console (never in production) and callers fall
     back to showing the link to an authorised administrator once."""
     if not platform_settings.email_configured:
         if not platform_settings.is_production:
-            logger.warning("Email delivery not configured; development message for %s: %s\n%s", to, subject, body)
+            # Development only: print the message so links can be followed locally.
+            # CR/LF are escaped so user-controlled values cannot forge log lines.
+            logger.warning("Email delivery not configured; development message: %s",
+                           _single_line(f"to={to} subject={subject} body={body}"))
             return EmailResult(False, "console")
         return EmailResult(False, "unconfigured")
     message = EmailMessage()
