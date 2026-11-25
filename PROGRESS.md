@@ -246,3 +246,44 @@ This section supersedes earlier capability claims above where they conflict.
 14. Testing: **COMPLETE for the executed backend suite, benchmark, frontend test command, production build and diff check** as evidenced above; live GitHub/tool validation and browser E2E are **NOT IMPLEMENTED / BLOCKED** by missing credentials and E2E coverage.
 
 Overall program remains **PARTIAL**. No completion claim is made for the whole platform: live GitHub integration, broad scanner semantics, project-level authorization, actor-linked audit, and full browser E2E verification remain outstanding.
+
+## Multi-tenant SaaS platform: 2026-11-26
+
+This section supersedes earlier capability statuses where they conflict. Work is on branch `feat/multitenant-saas`, in four commits after a checkpoint of the previously uncommitted work.
+
+### Safety actions
+- Verified the Git remote `https://github.com/jeevakumarr48/SecurCode.git`; no force-push, no history rewrite, no branch deletion.
+- Backed up `backend/sentinelops.db` before any work. Found that the existing tests wrote to the real database when `SECURCODE_DATABASE_PATH` was unset; one interrupted run left a rollback journal, and the database contents were verified identical to the backup. `backend/conftest.py` now isolates every test session.
+- Platform tables are additive (`sc_` prefix). Migration and legacy import were tested on a copy of the real database: all 15 legacy tables and their indexes are identical afterwards.
+
+### Implementation checklist (final acceptance criteria)
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Multiple users register; create orgs; join multiple orgs; invitations; roles; tenant isolation | ✅ | tests_v1 auth/tenancy suites, E2E |
+| Create projects; upload archives; scan; background processing; findings persisted | ✅ | `test_full_vulnerability_lifecycle`, E2E |
+| Connect GitHub repositories; branch scans; PR checks; webhook validation; credential revocation | 🟡 implemented, tested with a mocked GitHub API only | `test_integrations.py` |
+| Assignment, discussion, status transitions, risk acceptance, false-positive review, comparison, rescan verification | ✅ | workflow tests, E2E |
+| Dashboard uses real data; exports; SARIF validated; posture documented | ✅ | workflow test, schema validation, docs |
+| Hardened auth; authorisation; cross-tenant blocked; safe archives; worker isolation; secrets; audit | ✅ (process-level sandbox; residual risks documented) | security tests, threat model |
+| Local development; migrations | ✅ | DEVELOPMENT.md, alembic checks on SQLite and PostgreSQL |
+| Frontend, backend and worker deployed; public persistence, registration, scan and health verified | ❌ blocked: needs Render/Vercel/database accounts | deployment guide and blueprints ready |
+| Backup/recovery documented | ✅ | DEPLOYMENT-SAAS.md §11 |
+| README, architecture and DB diagrams, benchmark, security docs, test report, limitations | ✅ | docs/ |
+| Live demo URL | ❌ blocked (deployment) | — |
+| End-to-end demonstration | ✅ locally (Playwright journey + screenshots) | docs/screenshots |
+
+**Honest completion score: ~78%** of the acceptance criteria are verified. The remaining ~22% is public deployment and live verification (frontend, API and worker hosting, public smoke tests, live demo URL) plus live GitHub verification. These are blocked on credentials, not on code.
+
+### Features that remain partial or simulated
+- GitHub: real implementation, verified only against a mocked API.
+- Email: SMTP delivery implemented, not exercised (no provider). Without SMTP, links go to the console (development) or are shown once to the inviter.
+- PDF: printable HTML only. AI remediation: not implemented (deterministic guidance; UI states it).
+- Container images: Dockerfiles pass Trivy config checks but were not built here (Docker Hub blocked); CI builds them.
+- Platform configuration: read-only in the admin UI.
+
+### Technical debt
+- The legacy console and legacy API (raw sqlite3) coexist with the platform; plan their retirement once users have migrated.
+- 42 ruff findings in legacy modules (mostly S608 raw SQL strings in `database.py`); the platform code is lint-clean.
+- `findings` label filtering is done in Python for SQLite/PostgreSQL JSON portability.
+- The analytics trend is computed in Python per request; materialise it for large tenants.

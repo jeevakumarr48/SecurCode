@@ -103,7 +103,7 @@ _RULES = [
          "Use predefined functions.", "Arbitrary script execution."),
     Rule("JSSEC003", "child_process exec", "exec()/execSync() run a shell command string.", "high", "medium", "CWE-78", "A03", JS, LEX,
          "Use execFile/spawn with an argument array.", "Command injection.",
-         false_positives="Aliased imports (const run = cp.exec) are not detected (known false negative)."),
+         false_positives="Lexical: RegExp.prototype.exec calls on some expressions can be reported (known false positive); aliased imports (const run = cp.exec) are not detected (known false negative)."),
     Rule("JSSEC004", "spawn with shell:true", "spawn/execFile enable shell interpretation.", "high", "high", "CWE-78", "A03", JS, LEX,
          "Remove shell:true and pass an argument array.", "Command injection."),
     Rule("JSSEC005", "Hardcoded credential", "A secret-named property or variable has a literal value.", "high", "medium", "CWE-798", "A07", JS, LEX,

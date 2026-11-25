@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
 test("CSP script hash in vercel.json and nginx.conf matches the inline theme script", () => {
-  const script = /<script>([\s\S]*?)<\/script>/.exec(read("../index.html"))[1];
+  const script = read("../index.html").match(/<script>([\s\S]*?)<\/script>/)[1];
   const hash = `sha256-${createHash("sha256").update(script).digest("base64")}`;
   assert.ok(read("../vercel.json").includes(`'${hash}'`), "vercel.json CSP must contain the current inline-script hash");
   assert.ok(read("../deploy/nginx.conf").includes(`'${hash}'`), "nginx.conf CSP must contain the current inline-script hash");
