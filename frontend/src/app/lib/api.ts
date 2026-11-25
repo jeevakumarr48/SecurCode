@@ -5,8 +5,10 @@
  * memory and attached to state-changing requests.
  */
 
-const configured = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "");
-export const API_BASE = `${configured ?? ""}/api/v1`;
+// The platform API is always reached on the console's own origin (Vercel rewrite,
+// nginx or the Vite dev proxy) so the session cookie stays first-party and is
+// never sent cross-site. VITE_API_BASE_URL only configures the legacy console.
+export const API_BASE = "/api/v1";
 
 let csrfToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;

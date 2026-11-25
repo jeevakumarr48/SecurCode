@@ -168,14 +168,17 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
+    # Cookies are never accepted cross-origin: the multi-tenant console must be
+    # served same-origin with /api/v1 (Vercel rewrite, nginx or the Vite proxy).
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
-app.include_router(router)
-app.include_router(platform_router)
-app.include_router(auth_router)
+if LEGACY_API_ENABLED:
+    app.include_router(router)
+    app.include_router(platform_router)
+    app.include_router(auth_router)
 
 PUBLIC_PATHS = {"/", "/healthz", "/status", "/auth/login", "/auth/bootstrap"}
 if not production:
@@ -189,7 +192,7 @@ async def authenticate_and_authorize(request: Request, call_next):
         # /api/v1 enforces its own cookie session, CSRF and tenant authorization.
         return await call_next(request)
     if not LEGACY_API_ENABLED:
-        if path in {"/", "/healthz"}:
+        if path in {"/", "/healthz"} or (not production and path in {"/docs", "/redoc", "/openapi.json"}):
             return await call_next(request)
         return JSONResponse({"detail": "Not found."}, status_code=404)
     demo_mode = os.getenv("SECURCODE_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}

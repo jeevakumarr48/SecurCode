@@ -92,5 +92,5 @@ npm run test:e2e:platform   # Playwright: starts API, worker and Vite on a throw
 | `429 Too many requests` at login | Rate limit (30 per IP or 10 per account per 5 minutes). Wait 5 minutes. |
 | Account locked | 8 failed logins lock for 15 minutes. A platform admin can re-enable from **Platform administration**. |
 | `Stored credential could not be decrypted` | `SECURCODE_ENCRYPTION_KEY` changed. Restore the old key, or reconnect GitHub and re-enrol MFA. |
-| Vite build fails with `Set VITE_API_BASE_URL ... or VITE_SAME_ORIGIN_API=true` | Intentional production guard; choose how the browser reaches the API. |
+| Vite build fails with `Set VITE_SAME_ORIGIN_API=true ...` | Intentional production guard: configure a same-origin `/api/v1` proxy (Vercel rewrite or nginx), then set the flag. |
 | `disk I/O error` running tests on a network or virtual drive | SQLite cannot lock files there. Point `SECURCODE_DATABASE_PATH` at a local disk (conftest already uses the system temp directory). |

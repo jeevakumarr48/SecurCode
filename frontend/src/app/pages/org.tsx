@@ -228,7 +228,7 @@ export function IntegrationsPage() {
   const connect = useMutation({ mutationFn: () => api.post<Integration>(`/organizations/${org.id}/integrations/github`, { token, scan_pull_requests: true, publish_pr_results: true }), onSuccess: (i) => { setToken(""); setCreated(i); void invalidate(); } });
   const disconnect = useMutation({ mutationFn: (id: string) => api.delete(`/organizations/${org.id}/integrations/${id}`), onSuccess: invalidate });
   const toggle = useMutation({ mutationFn: ({ id, key, value }: { id: string; key: string; value: boolean }) => api.patch(`/organizations/${org.id}/integrations/${id}`, { [key]: value }), onSuccess: invalidate });
-  const webhookUrl = (i: Integration) => `${API_BASE.startsWith("http") ? API_BASE.replace(/\/api\/v1$/, "") : window.location.origin}${i.webhook_url}`;
+  const webhookUrl = (i: Integration) => `${window.location.origin}${i.webhook_url}`;
   return (
     <>
       <PageHeader title="GitHub integration" description="Connect with a fine-grained personal access token. The token is encrypted at rest, never returned to the browser, and only sent to api.github.com." />

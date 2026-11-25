@@ -114,11 +114,11 @@ def load_platform_settings() -> PlatformSettings:
     environment = legacy_settings.environment
     production = environment == "production"
     samesite = os.getenv("SECURCODE_COOKIE_SAMESITE", "lax").strip().lower()
-    if samesite not in {"lax", "strict", "none"}:
-        raise RuntimeError("SECURCODE_COOKIE_SAMESITE must be lax, strict or none.")
+    if samesite not in {"lax", "strict"}:
+        # Cross-site cookies (SameSite=None) are intentionally unsupported: the
+        # console reaches /api/v1 on its own origin.
+        raise RuntimeError("SECURCODE_COOKIE_SAMESITE must be lax or strict.")
     cookie_secure = _bool("SECURCODE_COOKIE_SECURE", production)
-    if samesite == "none" and not cookie_secure:
-        raise RuntimeError("SameSite=None cookies must also be Secure.")
     if production and not cookie_secure:
         raise RuntimeError("Production requires SECURCODE_COOKIE_SECURE=true.")
 

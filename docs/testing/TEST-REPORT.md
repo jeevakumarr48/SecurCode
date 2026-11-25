@@ -6,8 +6,8 @@ Run on 2026-11-26 in a Linux workspace (Python 3.13, Node 22, PostgreSQL 16, Goo
 
 | Check | Command | Result |
 |---|---|---|
-| Backend: full suite, legacy + platform (SQLite) | `cd backend && python -m pytest -q` | **251 passed, 2 skipped** |
-| Platform suite on PostgreSQL 16 | `SECURCODE_TEST_DATABASE_URL=postgresql://… python -m pytest tests_v1 -q` | **60 passed** |
+| Backend: full suite, legacy + platform (SQLite) | `cd backend && python -m pytest -q` | **253 passed, 2 skipped** |
+| Platform suite on PostgreSQL 16 | `SECURCODE_TEST_DATABASE_URL=postgresql://… python -m pytest tests_v1 -q` | **62 passed** |
 | Alembic (SQLite) | `alembic upgrade head && alembic check` | no drift |
 | Alembic (PostgreSQL) | upgrade → check → downgrade base → upgrade | all succeeded, no drift |
 | Migration on a copy of the real `sentinelops.db` | `cli migrate` + `cli import-legacy` (twice) | backup written; all 15 legacy tables and indexes identical before and after; import idempotent (1 user, 4 projects, 19 scans, 6 findings) |
@@ -37,7 +37,7 @@ Run on 2026-11-26 in a Linux workspace (Python 3.13, Node 22, PostgreSQL 16, Goo
 | Brute force | `test_account_lockout_after_repeated_failures`, `test_login_rate_limited_per_identifier` |
 | Password reset | `test_password_reset_flow_is_single_use_and_revokes_sessions` |
 | MFA | `test_totp_mfa_enrolment_and_login_challenge` (pending session, CSRF, replay) |
-| Hardening | `test_security_headers_and_request_id`, `test_oversized_body_rejected` |
+| Hardening | `test_security_headers_and_request_id`, `test_oversized_body_rejected`, `test_cors_never_allows_cross_origin_credentials`, `test_legacy_disabled_mode_exposes_only_platform_routes` |
 | Tenant isolation / IDOR | `test_every_org_route_rejects_foreign_org` (all 62 org routes → 404), `test_foreign_object_ids_under_own_org_are_not_found`, `test_foreign_tenant_data_unchanged_after_attack`, `test_guessed_ids_and_non_members`, `test_unauthenticated_requests_rejected` |
 | Roles | `test_role_permission_matrix_is_enforced_server_side` (5 roles × 6 actions), `test_admin_cannot_escalate_to_owner_or_demote_owner`, `test_platform_admin_is_not_an_org_member` |
 | Invitations, multiple orgs | `test_invitation_token_single_use_and_email_bound`, `test_user_can_belong_to_and_switch_between_orgs` |
@@ -75,6 +75,14 @@ The test runs against the real FastAPI app, the real worker and a throwaway SQLi
 11. An outsider in another organisation sees "Organization not found", and a direct `fetch` of the first organisation's findings returns **404**.
 
 Screenshots captured by this run are in [`../screenshots/`](../screenshots/).
+
+## Defects found by this testing (and fixed)
+
+- The MFA challenge could not be completed from a browser: the login response did not return the pending session's CSRF token. Found while building the login page; fixed, and the test now uses the API response instead of reading the database.
+- With the legacy API disabled (the PostgreSQL production configuration) `app.main` crashed at import, because a scripted edit had not applied. Found by `test_legacy_disabled_mode_exposes_only_platform_routes`; fixed.
+- The registry and the original engine disagreed on severity (tainted SQL reported as high instead of critical). The registry is now authoritative.
+- Seven benchmark false negatives in the first run: JS lookaheads ran on masked strings, and Flask `request` was alias-qualified. Both fixed.
+- A lexical JSSEC003 false positive (`RegExp.exec`) in a new test file; documented as a known limitation.
 
 ## Not tested or not verifiable here
 

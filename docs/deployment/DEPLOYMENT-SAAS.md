@@ -63,7 +63,7 @@ Separate worker: **New → Background Worker → Docker**, same image settings, 
 
 1. Edit `frontend/vercel.json`, replacing `REPLACE-WITH-YOUR-API-HOST` with your Render host (for example `securcode-api.onrender.com`).
 2. In Vercel, import the repository with root directory `frontend` and framework Vite.
-3. Set the environment variable `VITE_SAME_ORIGIN_API=true` (the build fails without it, or without an explicit `VITE_API_BASE_URL`).
+3. Set the environment variable `VITE_SAME_ORIGIN_API=true` (the production build fails without it). The console always calls `/api/v1` on its own origin; cross-origin cookie authentication is intentionally unsupported.
 4. Deploy, then set `SECURCODE_PUBLIC_APP_URL` and `SECURCODE_ALLOWED_ORIGINS` on Render to the Vercel URL and redeploy the API.
 
 ## 5. Bootstrap the first platform administrator

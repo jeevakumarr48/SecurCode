@@ -29,13 +29,13 @@ export default defineConfig(({ mode }) => {
   const sameOrigin = (process.env.VITE_SAME_ORIGIN_API || env.VITE_SAME_ORIGIN_API) === "true";
 
   if (mode === "production") {
-    if (apiBaseUrl) {
-      validateApiOrigin(apiBaseUrl);
-    } else if (!sameOrigin) {
-      // Production must state explicitly how the browser reaches the API:
-      // either an HTTPS API origin, or a same-origin reverse proxy (e.g. Vercel rewrites).
+    // VITE_API_BASE_URL configures only the legacy console and must be an HTTPS origin.
+    if (apiBaseUrl) validateApiOrigin(apiBaseUrl);
+    // The platform console calls /api/v1 on its own origin, so production hosting
+    // must proxy /api/v1 to the API (vercel.json rewrite or deploy/nginx.conf).
+    if (!sameOrigin) {
       throw new Error(
-        "Set VITE_API_BASE_URL to the public HTTPS API URL, or VITE_SAME_ORIGIN_API=true when /api/v1 is proxied.",
+        "Set VITE_SAME_ORIGIN_API=true after configuring a same-origin /api/v1 proxy (vercel.json or nginx).",
       );
     }
   }

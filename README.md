@@ -69,8 +69,8 @@ Actual results from [the test report](docs/testing/TEST-REPORT.md):
 
 | Check | Result |
 |---|---|
-| Backend tests, legacy + platform (SQLite) | 251 passed, 2 skipped |
-| Platform tests on PostgreSQL 16 | 60 passed |
+| Backend tests, legacy + platform (SQLite) | 253 passed, 2 skipped |
+| Platform tests on PostgreSQL 16 | 62 passed |
 | Cross-tenant sweep: every one of 62 org-scoped routes called with another tenant's ids | all return 404; data unchanged |
 | Browser E2E: register → invite → scan → assign → remediate → rescan → verify → export, plus outsider check | passed (real API, worker, Chrome) |
 | Frontend unit tests | 15 passed; type check and lint clean |

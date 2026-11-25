@@ -249,7 +249,7 @@ Overall program remains **PARTIAL**. No completion claim is made for the whole p
 
 ## Multi-tenant SaaS platform: 2026-11-26
 
-This section supersedes earlier capability statuses where they conflict. Work is on branch `feat/multitenant-saas`, in four commits after a checkpoint of the previously uncommitted work.
+This section supersedes earlier capability statuses where they conflict. Work is on branch `feat/multitenant-saas`: a checkpoint commit of the previously uncommitted work, followed by the implementation commits.
 
 ### Safety actions
 - Verified the Git remote `https://github.com/jeevakumarr48/SecurCode.git`; no force-push, no history rewrite, no branch deletion.

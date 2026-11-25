@@ -195,3 +195,34 @@ def test_oversized_body_rejected(make_client):
         "/api/v1/auth/login", content=b"x" * 1_100_000, headers={"content-type": "application/json"}
     )
     assert response.status_code == 413
+
+
+def test_legacy_disabled_mode_exposes_only_platform_routes(monkeypatch):
+    """With PostgreSQL (legacy API off) the legacy endpoints are unreachable."""
+    import subprocess
+    import sys
+
+    code = (
+        "from fastapi.testclient import TestClient; from app.main import app, LEGACY_API_ENABLED; "
+        "c = TestClient(app); assert LEGACY_API_ENABLED is False; "
+        "assert c.get('/scan').status_code == 404; assert c.get('/history').status_code == 404; "
+        "assert c.get('/api/v1/health/live').status_code == 200; assert c.get('/openapi.json').status_code == 200"
+    )
+    import os
+
+    env = {**os.environ, "SECURCODE_LEGACY_API": "false"}
+    result = subprocess.run([sys.executable, "-c", code], cwd=os.path.dirname(os.path.dirname(__file__)), env=env,
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_cors_never_allows_cross_origin_credentials(make_client):
+    """The console is same-origin only; a cross-origin page can never ride the session cookie."""
+    client = make_client().http
+    preflight = client.options("/api/v1/organizations", headers={
+        "Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "x-csrf-token,content-type"})
+    assert preflight.headers.get("access-control-allow-credentials") != "true"
+    assert "x-csrf-token" not in preflight.headers.get("access-control-allow-headers", "").lower()
+    denied = client.options("/api/v1/organizations", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in denied.headers
