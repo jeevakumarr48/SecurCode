@@ -41,10 +41,19 @@ def test_cors_allows_patch_for_finding_and_incident_workflows():
 
 def test_production_cors_rejects_http_and_wildcard_origins(monkeypatch):
     monkeypatch.setenv("SECURCODE_ENV", "production")
-    for origin, message in (("http://frontend.example", "HTTPS"), ("*", "exact web origins")):
+    for origin, message in (
+        ("http://frontend.example", "HTTPS"),
+        ("*", "exact web origins"),
+        ("https://*.frontend.example", "exact web origins"),
+    ):
         monkeypatch.setenv("SECURCODE_ALLOWED_ORIGINS", origin)
         with pytest.raises(RuntimeError, match=message):
             app_main._allowed_origins()
+
+
+def test_cors_does_not_enable_cookie_credentials():
+    cors = next(item for item in app_main.app.user_middleware if item.cls is CORSMiddleware)
+    assert cors.kwargs["allow_credentials"] is False
 
 
 def test_public_demo_mode_rejects_workspace_paths_outside_samples(tmp_path, monkeypatch):

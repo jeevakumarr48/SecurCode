@@ -33,6 +33,8 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
   const [assignmentError, setAssignmentError] = useState("");
   const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [commentInput, setCommentInput] = useState("");
+  const [pendingStatusChange, setPendingStatusChange] = useState(null);
+  const [statusNote, setStatusNote] = useState("");
   const [integrationTool, setIntegrationTool] = useState("bandit");
   const [integrationProjectId, setIntegrationProjectId] = useState("");
   const [status, setStatus] = useState({ loading: true, error: "" });
@@ -110,6 +112,8 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
     setSelectedProject(null);
     setProjectEdit(null);
     setComparison(null);
+    setPendingStatusChange(null);
+    setStatusNote("");
   }, [section]);
 
   const title = section === "Vulnerabilities" ? "Vulnerability management" : section;
@@ -179,6 +183,11 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
     catch (error) { setNotice(error.message); }
   }
 
+  async function downloadFindingSarif() {
+    try { await downloadReport("/reports/findings.sarif", "securcode-findings.sarif"); }
+    catch (error) { setNotice(error.message); }
+  }
+
   async function submitScan(event) {
     event.preventDefault(); setBusy(true); setNotice("");
     try {
@@ -188,16 +197,27 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
     finally { setBusy(false); }
   }
 
-  async function changeFindingStatus(finding, nextStatus) {
+  async function changeFindingStatus(finding, nextStatus, note = "") {
     setBusy(true); setNotice("");
     try {
-      await request(`/findings/${finding.scan_id}/${finding.finding_index}/status`, { method: "PATCH", body: JSON.stringify({ status: nextStatus }) });
+      await request(`/findings/${finding.scan_id}/${finding.finding_index}/status`, { method: "PATCH", body: JSON.stringify({ status: nextStatus, note }) });
       setNotice("Finding status saved."); await load();
+      setPendingStatusChange(null);
+      setStatusNote("");
       if (selected?.scan_id === finding.scan_id && selected?.finding_index === finding.finding_index) {
         setSelected(await request(`/findings/${finding.scan_id}/${finding.finding_index}`));
       }
     } catch (error) { setNotice(error.message); }
     finally { setBusy(false); }
+  }
+
+  function requestFindingStatus(finding, nextStatus) {
+    if (nextStatus === "Accepted Risk" || nextStatus === "False Positive") {
+      setPendingStatusChange({ finding, status: nextStatus });
+      setStatusNote("");
+      return;
+    }
+    return changeFindingStatus(finding, nextStatus);
   }
 
   async function createIncident(event) {
@@ -406,9 +426,27 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
     {section === "Vulnerabilities" && <>
       <div className="section-tools module-filter"><label htmlFor="finding-search">Search</label><input id="finding-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Rule, file, or description" /><label htmlFor="finding-status-filter">Lifecycle</label><select id="finding-status-filter" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="">All statuses</option>{findingStatuses.map((item) => <option key={item}>{item}</option>)}</select><label htmlFor="finding-severity-filter">Severity</label><select id="finding-severity-filter" value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}><option value="">All severities</option>{severities.map((item) => <option key={item}>{item}</option>)}</select><label htmlFor="finding-language-filter">Language</label><select id="finding-language-filter" value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}><option value="">All languages</option>{["Python", "JavaScript", "TypeScript"].map((item) => <option key={item}>{item}</option>)}</select><span className="table-count">{records?.total ?? "--"} findings</span></div>
       <TableState loading={status.loading} error={status.error} empty={records && recordsList.length === 0 ? { title: "No findings to review", detail: "Run a scan on a supported source directory to populate vulnerability management." } : null} columns={["Severity", "Rule", "Project / file", "Line", "Status", "Assignee", "Review"]}>
-        {recordsList.map((finding) => <tr key={`${finding.scan_id}:${finding.finding_index}`}><td><span className={`severity severity-${String(finding.severity || "unknown").toLowerCase()}`}>{finding.severity}</span></td><td><code>{finding.test_id}</code></td><td><span className="table-subtext">{finding.project_path}</span><code>{finding.filename}</code></td><td>{finding.line_number}</td><td><StatusSelect label="Finding status" value={finding.status} values={findingStatuses} disabled={!canManage || busy} onChange={(next) => changeFindingStatus(finding, next)} /></td><td>{finding.assignee || "Unassigned"}</td><td><button className="table-action" onClick={() => inspectFinding(finding)}>Evidence and history</button>{canManage && <button className="table-action" onClick={() => { const severityPriority = { CRITICAL: "Critical", HIGH: "High", MEDIUM: "Medium", LOW: "Low" }[String(finding.severity || "").toUpperCase()]; setForm({ ...form, title: `Review ${finding.test_id} in ${finding.project_path}`, description: "Investigate this detected source-code weakness; the finding is not evidence of a confirmed breach.", priority: severityPriority || form.priority, finding_ref: [finding.scan_id, finding.finding_index] }); onNavigate("Incidents"); }}>Create incident</button>}</td></tr>)}
+        {recordsList.map((finding) => <tr key={`${finding.scan_id}:${finding.finding_index}`}><td><span className={`severity severity-${String(finding.severity || "unknown").toLowerCase()}`}>{finding.severity}</span></td><td><code>{finding.test_id}</code></td><td><span className="table-subtext">{finding.project_path}</span><code>{finding.filename}</code></td><td>{finding.line_number}</td><td><StatusSelect label="Finding status" value={finding.status} values={findingStatuses} disabled={!canManage || busy} onChange={(next) => requestFindingStatus(finding, next)} /></td><td>{finding.assignee || "Unassigned"}</td><td><button className="table-action" onClick={() => inspectFinding(finding)}>Evidence and history</button>{canManage && <button className="table-action" onClick={() => { const severityPriority = { CRITICAL: "Critical", HIGH: "High", MEDIUM: "Medium", LOW: "Low" }[String(finding.severity || "").toUpperCase()]; setForm({ ...form, title: `Review ${finding.test_id} in ${finding.project_path}`, description: "Investigate this detected source-code weakness; the finding is not evidence of a confirmed breach.", priority: severityPriority || form.priority, finding_ref: [finding.scan_id, finding.finding_index] }); onNavigate("Incidents"); }}>Create incident</button>}</td></tr>)}
       </TableState>
-      {selected && <section className="detail-panel"><div className="section-heading"><div><span className="section-label">Finding detail</span><h2>{selected.test_id} · {selected.status}</h2></div><button className="text-button" onClick={() => setSelected(null)}>Close</button></div><p>{selected.description}</p><dl><dt>Evidence location</dt><dd><code>{selected.filename}:{selected.line_number}</code></dd><dt>Recommended remediation</dt><dd>{selected.remediation}</dd><dt>Confidence</dt><dd>{selected.confidence || "Not supplied by this rule"}</dd><dt>Assignee</dt><dd>{selected.assignee || "Unassigned"}</dd><dt>Status history</dt><dd>{selected.status_history?.length ? selected.status_history.map((entry) => `${entry.from_status} → ${entry.to_status} · ${entry.created_at}`).join("; ") : "No status changes recorded."}</dd><dt>Comments</dt><dd>{selected.comments?.length ? selected.comments.map((item) => `${item.actor}: ${item.comment} · ${item.created_at}`).join("; ") : "No comments yet."}</dd></dl>{canContribute && <><form className="module-form" onSubmit={updateAssignee}><label>Assignee<input maxLength="120" value={assigneeInput} onChange={(event) => setAssigneeInput(event.target.value)} placeholder="SecurCode username" /></label><p className="module-description">Enter an active account username; leave blank to unassign.</p>{assignmentError && <p className="api-alert" role="alert">{assignmentError}</p>}<button className="button button-secondary" disabled={assignmentSaving}>{assignmentSaving ? "Saving assignment…" : "Save assignment"}</button></form><form className="module-form" onSubmit={addComment}><label>Comment<textarea required maxLength="4000" value={commentInput} onChange={(event) => setCommentInput(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Add comment</button></form></>}</section>}
+      {pendingStatusChange && <form className="module-form status-note-form" onSubmit={(event) => { event.preventDefault(); changeFindingStatus(pendingStatusChange.finding, pendingStatusChange.status, statusNote); }}><div><span className="section-label">Finding decision</span><strong>{pendingStatusChange.status}</strong><p className="module-description">Record a justification for this decision. It will be retained in the finding's status history.</p></div><label htmlFor="finding-status-note">Justification<textarea id="finding-status-note" required maxLength="1000" value={statusNote} onChange={(event) => setStatusNote(event.target.value)} /></label><div className="status-note-actions"><button className="button button-primary" disabled={busy}>Save {pendingStatusChange.status}</button><button className="button button-secondary" type="button" disabled={busy} onClick={() => { setPendingStatusChange(null); setStatusNote(""); }}>Cancel</button></div></form>}
+      {selected && <section className="detail-panel">
+        <div className="section-heading"><div><span className="section-label">Finding detail</span><h2>{selected.test_id} · {selected.status}</h2></div><button className="text-button" onClick={() => setSelected(null)}>Close</button></div>
+        <p>{selected.description}</p>
+        <dl>
+          <dt>Evidence location</dt><dd><code>{selected.filename}:{selected.line_number}</code></dd>
+          <dt>Recommended remediation</dt><dd>{selected.remediation}</dd>
+          <dt>Confidence</dt><dd>{selected.confidence || "Not supplied by this rule"}</dd>
+          <dt>Assignee</dt><dd>{selected.assignee || "Unassigned"}</dd>
+          <dt>Recurring observations</dt><dd>Observed in {selected.occurrence_count} recorded scan{selected.occurrence_count === 1 ? "" : "s"}.</dd>
+          <dt>Follow-up scan check</dt><dd><strong>{selected.verification?.status?.replaceAll("_", " ") || "unknown"}</strong> · {selected.verification?.message || "No verification data available."}</dd>
+          <dt>Status history</dt><dd>{selected.status_history?.length ? selected.status_history.map((entry) => `${entry.from_status} → ${entry.to_status} · ${entry.actor} · ${entry.created_at}${entry.note ? ` · ${entry.note}` : ""}`).join("; ") : "No status changes recorded."}</dd>
+          <dt>Comments</dt><dd>{selected.comments?.length ? selected.comments.map((item) => `${item.actor}: ${item.comment} · ${item.created_at}`).join("; ") : "No comments yet."}</dd>
+        </dl>
+        {canContribute && <>
+          <form className="module-form" onSubmit={updateAssignee}><label>Assignee<input maxLength="120" value={assigneeInput} onChange={(event) => setAssigneeInput(event.target.value)} placeholder="SecurCode username" /></label><p className="module-description">Enter an active account username; leave blank to unassign.</p>{assignmentError && <p className="api-alert" role="alert">{assignmentError}</p>}<button className="button button-secondary" disabled={assignmentSaving}>{assignmentSaving ? "Saving assignment…" : "Save assignment"}</button></form>
+          <form className="module-form" onSubmit={addComment}><label>Comment<textarea required maxLength="4000" value={commentInput} onChange={(event) => setCommentInput(event.target.value)} /></label><button className="button button-secondary" disabled={busy}>Add comment</button></form>
+        </>}
+      </section>}
     </>}
 
     {section === "Incidents" && <>
@@ -452,8 +490,8 @@ export default function PlatformPage({ section, request, readOnly, role = "read_
     {section === "Reports" && <>
       {status.loading ? <div className="module-message" role="status">Loading report data…</div> : status.error ? <div className="api-alert" role="alert"><div><strong>Report data unavailable</strong><span>{status.error}</span></div></div> : dashboard && <>
         <div className="metric-grid report-metrics"><div className="metric"><span>Total scans</span><strong>{dashboard.total_scans}</strong></div><div className="metric"><span>Total findings</span><strong>{dashboard.total_findings}</strong></div><div className="metric"><span>Projects</span><strong>{dashboard.projects_count}</strong></div><div className="metric"><span>High / critical</span><strong>{dashboard.high_severity_findings}</strong></div></div>
-        <div className="report-actions"><div><h2>Finding export</h2><p>CSV includes finding evidence, project-relative paths, and remediation status. Spreadsheet formula prefixes are escaped.</p></div><button className="button button-primary" onClick={downloadFindingReport}>Download findings CSV</button></div>
-        <div className="table-section"><div className="section-heading"><div><h2>Available reports</h2><p>Generation state reflects live API data and supported export formats.</p></div></div><TableState loading={false} error="" columns={["Report", "Category", "Status", "Format", "Action"]}><tr><td><strong>Workspace findings</strong><span className="table-subtext">Current finding evidence and remediation state</span></td><td>Vulnerability inventory</td><td><span className="status-badge status-completed"><span className="status-dot" />Ready</span></td><td>CSV</td><td><button className="table-action" onClick={downloadFindingReport}>Download CSV</button></td></tr><tr><td><strong>Workspace posture</strong><span className="table-subtext">Current scan, finding, and project summary</span></td><td>Security posture</td><td><span className="status-badge status-running"><span className="status-dot" />Live data</span></td><td>On screen</td><td><span className="muted-value">No export endpoint</span></td></tr></TableState></div>
+        <div className="report-actions"><div><h2>Finding export</h2><p>CSV and SARIF include finding evidence, project-relative paths, scan metadata, and remediation guidance. Spreadsheet formula prefixes are escaped in CSV.</p></div><div className="report-action-buttons"><button className="button button-primary" onClick={downloadFindingReport}>Download findings CSV</button><button className="button button-secondary" onClick={downloadFindingSarif}>Download findings SARIF</button></div></div>
+        <div className="table-section"><div className="section-heading"><div><h2>Available reports</h2><p>Generation state reflects live API data and supported export formats.</p></div></div><TableState loading={false} error="" columns={["Report", "Category", "Status", "Format", "Action"]}><tr><td><strong>Workspace findings</strong><span className="table-subtext">Current finding evidence and remediation state</span></td><td>Vulnerability inventory</td><td><span className="status-badge status-completed"><span className="status-dot" />Ready</span></td><td>CSV / SARIF</td><td><button className="table-action" onClick={downloadFindingReport}>Download CSV</button><button className="table-action" onClick={downloadFindingSarif}>Download SARIF</button></td></tr><tr><td><strong>Workspace posture</strong><span className="table-subtext">Current scan, finding, and project summary</span></td><td>Security posture</td><td><span className="status-badge status-running"><span className="status-dot" />Live data</span></td><td>On screen</td><td><span className="muted-value">No export endpoint</span></td></tr></TableState></div>
         <div className="table-section"><h2>Scan trend</h2><p className="module-description">Daily scan volume and finding totals from recorded scans.</p><TableState loading={false} error="" empty={dashboard.trends.length === 0 ? { title: "No trend data", detail: "Run scans to build a time series from real scan history." } : null} columns={["Date", "Scans", "Findings"]}>{dashboard.trends.map((item) => <tr key={item.date}><td>{item.date}</td><td>{item.scans}</td><td>{item.findings}</td></tr>)}</TableState></div>
       </>}
     </>}

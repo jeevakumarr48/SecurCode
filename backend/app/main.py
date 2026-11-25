@@ -149,6 +149,7 @@ production = settings.environment == "production"
 app = FastAPI(
     title="SecurCode Security API",
     version="1.0.0",
+    debug=False,
     lifespan=lifespan,
     docs_url=None if production else "/docs",
     redoc_url=None if production else "/redoc",
@@ -167,6 +168,10 @@ app.include_router(router)
 app.include_router(platform_router)
 app.include_router(auth_router)
 
+PUBLIC_PATHS = {"/", "/healthz", "/status", "/auth/login", "/auth/bootstrap"}
+if not production:
+    PUBLIC_PATHS.update({"/openapi.json", "/docs", "/redoc"})
+
 
 @app.middleware("http")
 async def authenticate_and_authorize(request: Request, call_next):
@@ -174,8 +179,7 @@ async def authenticate_and_authorize(request: Request, call_next):
     demo_mode = os.getenv("SECURCODE_DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
     if demo_mode and path.startswith("/auth/"):
         return JSONResponse({"detail": "Authentication endpoints are unavailable in the public demo."}, status_code=404)
-    public_paths = {"/", "/healthz", "/status", "/auth/login", "/auth/bootstrap", "/openapi.json", "/docs", "/redoc"}
-    if request.method == "OPTIONS" or path in public_paths:
+    if request.method == "OPTIONS" or path in PUBLIC_PATHS:
         return await call_next(request)
     if demo_mode:
         if request.method in {"GET", "HEAD"} or path == "/scan":
@@ -227,6 +231,8 @@ async def apply_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     if request.url.path not in {"/docs", "/redoc"}:
         response.headers["Content-Security-Policy"] = (
             "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"

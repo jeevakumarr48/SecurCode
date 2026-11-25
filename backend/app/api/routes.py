@@ -96,7 +96,8 @@ def _public_scan_result(result, project_path=None):
             if finding.get("filename")
             else finding.get("filename"),
         }
-        record["finding_id"] = finding_fingerprint(stable_project_path, record)
+        record["finding_id"] = finding.get("finding_id") or finding_fingerprint(stable_project_path, record)
+        record.pop("_include_column_in_fingerprint", None)
         public_findings.append(record)
     public_result = {
         **result,
@@ -248,7 +249,16 @@ def _scan_request(request: ScanRequest):
         }
         public_failed_result = _public_scan_result(failed_result, workspace_relative_path(target_path))
         try:
-            save_scan(workspace_relative_path(target_path), public_failed_result)
+            if user:
+                save_scan(
+                    workspace_relative_path(target_path),
+                    public_failed_result,
+                    actor=user["username"],
+                )
+            else:
+                save_scan(
+                    workspace_relative_path(target_path), public_failed_result
+                )
         except Exception:
             logger.exception("Unable to persist failed scan history")
             raise HTTPException(
@@ -262,7 +272,14 @@ def _scan_request(request: ScanRequest):
 
     public_result = _public_scan_result(result, workspace_relative_path(target_path))
     try:
-        save_scan(workspace_relative_path(target_path), public_result)
+        if user:
+            save_scan(
+                workspace_relative_path(target_path),
+                public_result,
+                actor=user["username"],
+            )
+        else:
+            save_scan(workspace_relative_path(target_path), public_result)
     except Exception:
         logger.exception("Unable to persist scan history")
         raise HTTPException(

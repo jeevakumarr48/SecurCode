@@ -8,7 +8,7 @@ import sqlite3
 import os
 from typing import Literal
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field, field_validator
@@ -61,8 +61,54 @@ def _finding_for(connection, scan_id, finding_index):
         "status_updated_at": state["updated_at"] if state else None,
         "finding_id": state["fingerprint"] if state and state["fingerprint"] else finding_fingerprint(scan["project_path"], finding),
     })
+    if finding.get("filename"):
+        finding["filename"] = workspace_relative_path(finding["filename"])
     finding.setdefault("remediation", remediation_for(finding.get("test_id")))
     return finding
+
+
+def _finding_verification(connection, finding):
+    source_scan = connection.execute(
+        "SELECT project_id FROM scans WHERE id = ?",
+        (finding["scan_id"],),
+    ).fetchone()
+    if source_scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found.")
+    subsequent_scan = connection.execute(
+        """SELECT id, status, created_at FROM scans
+           WHERE project_id = ? AND id > ?
+           ORDER BY id DESC LIMIT 1""",
+        (source_scan["project_id"], finding["scan_id"]),
+    ).fetchone()
+    if subsequent_scan is None:
+        return {
+            "status": "pending",
+            "scan_id": None,
+            "scan_created_at": None,
+            "message": "No subsequent scan is available to check this finding.",
+        }
+    if subsequent_scan["status"] != "completed":
+        return {
+            "status": "inconclusive",
+            "scan_id": subsequent_scan["id"],
+            "scan_created_at": subsequent_scan["created_at"],
+            "message": "The latest subsequent scan was not completed; absence cannot be assessed.",
+        }
+    detected = connection.execute(
+        """SELECT 1 FROM finding_states
+           WHERE scan_id = ? AND fingerprint = ? LIMIT 1""",
+        (subsequent_scan["id"], finding["finding_id"]),
+    ).fetchone() is not None
+    return {
+        "status": "detected" if detected else "not_detected",
+        "scan_id": subsequent_scan["id"],
+        "scan_created_at": subsequent_scan["created_at"],
+        "message": (
+            "The finding was detected again in the latest completed scan."
+            if detected
+            else "The finding was not detected in the latest completed scan; manual confirmation is still required."
+        ),
+    }
 
 
 class ProjectCreate(BaseModel):
@@ -199,9 +245,13 @@ def _persist_external_scan(project, findings, scanner, git_metadata=None):
     relative_path = workspace_relative_path(project["project_path"])
     public = _public_scan_result(result, relative_path)
     git_metadata = git_metadata or {}
-    scan_id = save_scan(relative_path, public, git_metadata=git_metadata)
+    actor = current_user()
+    actor_name = actor["username"] if actor else "system"
+    scan_id = save_scan(
+        relative_path, public, git_metadata=git_metadata, actor=actor_name
+    )
     with get_connection() as connection:
-        record_audit_event(connection, "system", "integration.scan_imported", "scan", scan_id,
+        record_audit_event(connection, actor_name, "integration.scan_imported", "scan", scan_id,
                            {"scanner": scanner, "project_id": project["id"], "finding_count": len(findings), **git_metadata})
     return {**public, "scan_id": scan_id, "scanner": scanner, **git_metadata}
 
@@ -221,7 +271,8 @@ def run_external_scan(tool: str, request: ExternalScanRequest):
             findings = run_optional_scanner(tool, target, timeout=request.timeout_seconds, semgrep_config=config)
     except (IntegrationError, TrivyError) as error:
         with get_connection() as connection:
-            record_audit_event(connection, "system", "integration.scan_failed", "project", project["id"],
+            actor = current_user()
+            record_audit_event(connection, actor["username"] if actor else "system", "integration.scan_failed", "project", project["id"],
                                {"scanner": tool, "reason": str(error)[:500]}, outcome="failure")
         raise HTTPException(status_code=503, detail=str(error)) from None
     finally:
@@ -333,6 +384,8 @@ def compare_scan(scan_id: int, against_scan_id: int | None = None):
         previous_findings = json.loads(previous["findings_json"]) if previous else []
 
     def identity(finding):
+        if finding.get("finding_id"):
+            return finding["finding_id"]
         return (finding.get("language"), finding.get("test_id"), finding.get("filename"), finding.get("line_number"))
 
     previous_keys = {identity(item) for item in previous_findings}
@@ -427,7 +480,8 @@ def update_project(project_id: int, request: ProjectUpdate):
         cursor = connection.execute(f"UPDATE projects SET {assignments}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?", (*updates.values(), project_id))
         if not cursor.rowcount:
             raise HTTPException(status_code=404, detail="Project not found.")
-        record_audit_event(connection, "local-operator", "project.updated", "project", project_id, {"changed_fields": list(updates)})
+        actor = current_user()
+        record_audit_event(connection, actor["username"] if actor else "local-operator", "project.updated", "project", project_id, {"changed_fields": list(updates)})
         row = connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
     project = dict(row)
     project["project_path"] = workspace_relative_path(project["project_path"])
@@ -493,6 +547,11 @@ def finding_detail(scan_id: int, finding_index: int):
             SELECT actor, comment, created_at FROM finding_comments
             WHERE fingerprint = ? ORDER BY id
         """, (item["finding_id"],))]
+        item["occurrence_count"] = connection.execute(
+            "SELECT COUNT(DISTINCT scan_id) FROM finding_states WHERE fingerprint = ?",
+            (item["finding_id"],),
+        ).fetchone()[0]
+        item["verification"] = _finding_verification(connection, item)
         item["incidents"] = [dict(row) for row in connection.execute("""
             SELECT i.id, i.title, i.status, i.priority FROM incidents i
             JOIN incident_findings r ON r.incident_id = i.id
@@ -513,12 +572,14 @@ def update_finding_status(scan_id: int, finding_index: int, request: FindingStat
         connection.execute("INSERT OR IGNORE INTO finding_states(scan_id, finding_index) VALUES (?, ?)", (scan_id, finding_index))
         connection.execute("UPDATE finding_states SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE scan_id = ? AND finding_index = ?", (request.status, scan_id, finding_index))
         if old_status != request.status:
-            connection.execute("INSERT INTO finding_status_history(scan_id, finding_index, from_status, to_status, actor, note) VALUES (?, ?, ?, ?, ?, ?)", (scan_id, finding_index, old_status, request.status, "local-operator", note))
+            actor = current_user()
+            actor_name = actor["username"] if actor else "local-operator"
+            connection.execute("INSERT INTO finding_status_history(scan_id, finding_index, from_status, to_status, actor, note) VALUES (?, ?, ?, ?, ?, ?)", (scan_id, finding_index, old_status, request.status, actor_name, note))
             action = "finding.suppressed" if request.status in {"Accepted Risk", "False Positive"} else "finding.status_changed"
             metadata = {"from": old_status, "to": request.status}
             if action == "finding.suppressed":
                 metadata["justification"] = note[:500]
-            record_audit_event(connection, "local-operator", action, "finding", f"{scan_id}:{finding_index}", metadata)
+            record_audit_event(connection, actor_name, action, "finding", f"{scan_id}:{finding_index}", metadata)
     return finding_detail(scan_id, finding_index)
 
 
@@ -559,8 +620,10 @@ def add_finding_comment(scan_id: int, finding_index: int, request: FindingCommen
         raise HTTPException(status_code=400, detail="Comment cannot be blank.")
     with get_connection() as connection:
         finding = _finding_for(connection, scan_id, finding_index)
-        connection.execute("INSERT INTO finding_comments(scan_id, finding_index, fingerprint, actor, comment) VALUES (?, ?, ?, ?, ?)", (scan_id, finding_index, finding["finding_id"], "local-operator", comment))
-        record_audit_event(connection, "local-operator", "finding.commented", "finding", f"{scan_id}:{finding_index}", {"comment_length": len(comment)})
+        actor = current_user()
+        actor_name = actor["username"] if actor else "local-operator"
+        connection.execute("INSERT INTO finding_comments(scan_id, finding_index, fingerprint, actor, comment) VALUES (?, ?, ?, ?, ?)", (scan_id, finding_index, finding["finding_id"], actor_name, comment))
+        record_audit_event(connection, actor_name, "finding.commented", "finding", f"{scan_id}:{finding_index}", {"comment_length": len(comment)})
     return finding_detail(scan_id, finding_index)
 
 
@@ -680,8 +743,10 @@ def create_incident(request: IncidentCreate):
         incident_id = cursor.lastrowid
         for scan_id, index in sorted(set(request.finding_refs)):
             connection.execute("INSERT INTO incident_findings(incident_id, scan_id, finding_index) VALUES (?, ?, ?)", (incident_id, scan_id, index))
-        connection.execute("INSERT INTO incident_activity(incident_id, actor, action, details_json) VALUES (?, ?, ?, ?)", (incident_id, "local-operator", "created", json.dumps({"status": request.status, "finding_count": len(set(request.finding_refs))})))
-        record_audit_event(connection, "local-operator", "incident.created", "incident", incident_id, {"status": request.status, "finding_count": len(set(request.finding_refs))})
+        actor = current_user()
+        actor_name = actor["username"] if actor else "local-operator"
+        connection.execute("INSERT INTO incident_activity(incident_id, actor, action, details_json) VALUES (?, ?, ?, ?)", (incident_id, actor_name, "created", json.dumps({"status": request.status, "finding_count": len(set(request.finding_refs))})))
+        record_audit_event(connection, actor_name, "incident.created", "incident", incident_id, {"status": request.status, "finding_count": len(set(request.finding_refs))})
         create_notification(connection, "incident", f"incident:{incident_id}:created", "Incident created", request.title.strip(), "/Incidents")
         return _incident_dict(connection, incident_id)
 
@@ -711,8 +776,10 @@ def update_incident(incident_id: int, request: IncidentUpdate):
             safe_change = {"changed_fields": list(changes)}
             if "status" in changes:
                 safe_change["status"] = changes["status"]
-            connection.execute("INSERT INTO incident_activity(incident_id, actor, action, details_json) VALUES (?, ?, ?, ?)", (incident_id, "local-operator", "updated", json.dumps(safe_change)))
-            record_audit_event(connection, "local-operator", "incident.updated", "incident", incident_id, safe_change)
+            actor = current_user()
+            actor_name = actor["username"] if actor else "local-operator"
+            connection.execute("INSERT INTO incident_activity(incident_id, actor, action, details_json) VALUES (?, ?, ?, ?)", (incident_id, actor_name, "updated", json.dumps(safe_change)))
+            record_audit_event(connection, actor_name, "incident.updated", "incident", incident_id, safe_change)
         return _incident_dict(connection, incident_id)
 
 
@@ -736,3 +803,92 @@ def findings_csv():
         values = [item.get("severity"), item.get("status"), item.get("test_id"), item.get("language"), item.get("project_path"), item.get("filename"), item.get("line_number"), item.get("description"), item.get("remediation"), item.get("scan_created_at")]
         writer.writerow([("'" + value) if isinstance(value, str) and value[:1] in "=+-@\t\r" else value for value in values])
     return Response(output.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=securcode-findings.csv"})
+
+
+@router.get("/reports/findings.sarif")
+def findings_sarif():
+    data = list_findings(search="", limit=200, offset=0)
+    if data["total"] > 200:
+        raise HTTPException(status_code=400, detail="SARIF report is limited to the first 200 findings; use the paginated findings API for larger datasets.")
+
+    rule_ids = sorted({str(item.get("test_id") or "UNKNOWN") for item in data["findings"]})
+    rule_indexes = {rule_id: index for index, rule_id in enumerate(rule_ids)}
+    rules = []
+    for rule_id in rule_ids:
+        finding = next(item for item in data["findings"] if str(item.get("test_id") or "UNKNOWN") == rule_id)
+        tags = ["security"]
+        cwe = finding.get("cwe")
+        if isinstance(cwe, str) and cwe.startswith("CWE-"):
+            tags.append(f"external/cwe/{cwe}")
+        rules.append({
+            "id": rule_id,
+            "shortDescription": {"text": finding.get("description") or rule_id},
+            "help": {"text": finding.get("remediation") or remediation_for(rule_id)},
+            "properties": {"tags": tags},
+        })
+
+    scans = {}
+    results = []
+    sarif_levels = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note"}
+    for item in data["findings"]:
+        rule_id = str(item.get("test_id") or "UNKNOWN")
+        filename = item.get("filename")
+        artifact_uri = (
+            "outside-workspace" if filename == "<outside-workspace>"
+            else quote(str(filename).replace("\\", "/"), safe="/._-") if filename
+            else "unknown"
+        )
+        result = {
+            "ruleId": rule_id,
+            "ruleIndex": rule_indexes[rule_id],
+            "level": sarif_levels.get(str(item.get("severity", "")).upper(), "warning"),
+            "message": {"text": item.get("description") or "Security finding detected."},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": artifact_uri},
+                    **(
+                        {"region": {"startLine": item["line_number"]}}
+                        if isinstance(item.get("line_number"), int) and item["line_number"] > 0
+                        else {}
+                    ),
+                },
+            }],
+            "partialFingerprints": {"securcode/findingId/v1": item["finding_id"]},
+            "properties": {
+                "cwe": item.get("cwe"),
+                "status": item.get("status"),
+                "assignee": item.get("assignee"),
+                "confidence": item.get("confidence"),
+                "remediation": item.get("remediation"),
+                "projectPath": item.get("project_path"),
+                "scanId": item.get("scan_id"),
+                "scanStatus": item.get("scan_status"),
+                "scanCreatedAt": item.get("scan_created_at"),
+            },
+        }
+        column_number = item.get("column_number")
+        if isinstance(column_number, int) and column_number > 0:
+            physical_location = result["locations"][0]["physicalLocation"]
+            physical_location.setdefault("region", {})["startColumn"] = column_number
+        results.append(result)
+        scans[item["scan_id"]] = {
+            "scanId": item["scan_id"],
+            "projectPath": item.get("project_path"),
+            "status": item.get("scan_status"),
+            "createdAt": item.get("scan_created_at"),
+        }
+
+    payload = {
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "SecurCode", "rules": rules}},
+            "results": results,
+            "properties": {"scans": list(scans.values())},
+        }],
+    }
+    return Response(
+        json.dumps(payload, ensure_ascii=False),
+        media_type="application/sarif+json; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=securcode-findings.sarif"},
+    )

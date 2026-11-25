@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import threading
 import time
@@ -219,9 +220,30 @@ def update_user(user_id: int, request: UserUpdate, client_request: Request):
         updates["password_hash"] = digest
     assignments = ", ".join(f"{name} = ?" for name in updates)
     with get_connection() as connection:
-        cursor = connection.execute(f"UPDATE auth_users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
-        if not cursor.rowcount:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            "SELECT role, disabled FROM auth_users WHERE id = ?", (user_id,)
+        ).fetchone()
+        if not existing:
             raise HTTPException(status_code=404, detail="User not found.")
+        next_role = request.role if request.role is not None else existing["role"]
+        next_disabled = request.disabled if request.disabled is not None else existing["disabled"]
+        if (
+            existing["role"] == "administrator"
+            and not existing["disabled"]
+            and (next_role != "administrator" or next_disabled)
+        ):
+            other_active_admins = connection.execute(
+                """SELECT COUNT(*) FROM auth_users
+                   WHERE role = 'administrator' AND disabled = 0 AND id <> ?""",
+                (user_id,),
+            ).fetchone()[0]
+            if other_active_admins == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail="At least one active administrator must remain.",
+                )
+        cursor = connection.execute(f"UPDATE auth_users SET {assignments} WHERE id = ?", (*updates.values(), user_id))
         if request.disabled or request.password is not None:
             connection.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
         record_audit_event(
@@ -282,6 +304,10 @@ def allowed_for_role(role: str, method: str, path: str) -> bool:
     if role in {"administrator", "security_analyst"}:
         return True
     if role == "developer":
-        return (path in {"/scan"} or path.endswith("/scan") or "/comments" in path
-                or path.endswith("/assignee") or path.endswith("/read"))
+        return (
+            path == "/scan"
+            or re.fullmatch(r"/projects/\d+/scan", path) is not None
+            or re.fullmatch(r"/integrations/[^/]+/scan", path) is not None
+            or re.fullmatch(r"/findings/\d+/\d+/(?:assignee|comments)", path) is not None
+        )
     return False

@@ -61,9 +61,14 @@ def test_production_application_disables_public_api_documentation(tmp_path):
             sys.executable,
             "-c",
             "from app.main import app; "
+            "assert app.debug is False; "
             "assert app.docs_url is None; "
             "assert app.redoc_url is None; "
-            "assert app.openapi_url is None",
+            "assert app.openapi_url is None; "
+            "from app import main; "
+            "assert '/docs' not in main.PUBLIC_PATHS; "
+            "assert '/redoc' not in main.PUBLIC_PATHS; "
+            "assert '/openapi.json' not in main.PUBLIC_PATHS",
         ],
         cwd=backend_dir,
         env=environment,

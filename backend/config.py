@@ -35,7 +35,8 @@ def parse_allowed_origins():
     for value in values:
         parsed = urlsplit(value)
         if (
-            parsed.scheme not in {"http", "https"}
+            "*" in value
+            or parsed.scheme not in {"http", "https"}
             or not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None

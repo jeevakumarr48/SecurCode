@@ -1,5 +1,75 @@
 # Deployment and recovery
 
+## Deploy the backend for a Vercel-hosted frontend
+
+The backend needs a persistent Linux web service with a durable mounted disk and the repository's backend source tree available at runtime. It is not a stateless/serverless API: scans read local files under the checked-out SecurCode workspace, SQLite stores operational data on disk, and login throttling plus scan concurrency are process-local. Do not deploy this API as a Vercel Function or scale it across instances.
+
+### 1. Provision the backend service and disk
+
+Choose a provider that supports a continuously running Python web service and persistent mounted storage. Create the disk before the first deployment, mount it at a fixed path (for example `/var/data`), and ensure the service user can read and write there. Do not point the database at the checkout, a temporary directory, or an ephemeral container filesystem.
+
+Make the complete SecurCode repository checkout available to the backend. The scanner resolves project paths relative to the repository workspace and the bundled demo source is inside that checkout. If the provider allows selecting a root directory, `backend` can be the service working directory; the repository root still needs to be present above it for workspace scanning.
+
+### 2. Configure production environment variables
+
+Set these in the provider's service settings/secret manager (not in source control):
+
+| Variable | Value |
+|---|---|
+| `SECURCODE_ENV` | `production` |
+| `SECURCODE_DEMO_MODE` | `false` |
+| `SECURCODE_ALLOWED_ORIGINS` | Exact Vercel frontend origin, such as `https://your-app.vercel.app` (scheme and hostname only; no path, trailing route, wildcard, or preview wildcard) |
+| `SECURCODE_DATABASE_PATH` | Absolute file path on the mounted disk, for example `/var/data/sentinelops.db` |
+| `PORT` | The port supplied by the hosting provider; the start command below uses it, with `8000` as a local fallback |
+
+`SECURCODE_DATABASE_PATH`'s parent directory must already exist when the application starts; mount the disk at `/var/data` before starting the process. The application creates/initializes the SQLite file at that configured path. This creates a separate host-side database; it neither moves nor overwrites the local `backend/sentinelops.db`.
+
+For the first administrator only, set `SECURCODE_BOOTSTRAP_TOKEN` to a cryptographically random value of at least 32 characters using the provider's secret manager. After creating the administrator, remove that environment variable and restart the service. Existing accounts do not require the bootstrap token at startup. Never put the token, password, or bearer token in a command, source file, build variable, or logs.
+
+`SECURCODE_ALLOWED_ORIGINS` is parsed as a comma-separated list of exact origins and production requires HTTPS. For Vercel preview deployments, use a stable custom domain or explicitly list the exact preview origins that are intended to have access. Do not configure `*` or a wildcard preview hostname. Set Vercel's `VITE_API_BASE_URL` to the backend's public HTTPS base URL at frontend build time.
+
+### Production request and session security
+
+The API uses opaque bearer sessions; it does not set authentication cookies. The frontend keeps the bearer token in memory and sends it in the `Authorization` header. CORS credentials are disabled. `SameSite`, `Secure`, and `HttpOnly` cookie attributes therefore do not apply. Do not add cookie-based auth without designing and testing CSRF protection. API responses use `Cache-Control: no-store` and `Pragma: no-cache`; sessions expire after eight hours and are revoked on logout, password change (other sessions), or account disablement.
+
+The production FastAPI app disables debug mode and Swagger, ReDoc, and OpenAPI. Those documentation routes are also excluded from the production unauthenticated-path list. The API adds `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and a restrictive API Content Security Policy.
+
+TLS termination, HTTP-to-HTTPS redirects, and HSTS must be configured at the hosting edge; the app does not set HSTS because it may run behind a TLS-terminating proxy. Configure the separately hosted frontend's security headers at its hosting edge as well, testing the Content Security Policy against the built application assets and styles. Do not assume the API's headers protect the frontend.
+
+When running behind a reverse proxy, trust forwarded client/protocol headers only from the hosting provider's documented proxy IPs or CIDRs. Configure Uvicorn's forwarded-header allowlist accordingly; never trust forwarded headers from `*` or from arbitrary clients. If the provider cannot supply a stable trusted-proxy range, do not use forwarded headers to derive client IPs or security decisions. Login throttling allows at most 10 attempts per client address in a rolling five-minute process-local window; a successful login clears that address's failures. The counter resets on process restart and is not shared across workers or replicas. The app's login throttle and scan semaphore are process-local; keep one worker and one replica.
+
+### 3. Install and start the backend
+
+Use the deployment dependencies in `backend/requirements-deploy.txt`. From the `backend` working directory, configure this production start command:
+
+```sh
+python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --workers 1
+```
+
+The provider must pass its assigned `PORT` to the process. The single worker is intentional: login throttling and the built-in scan semaphore are in-memory and are not shared across workers or replicas. Do not increase workers, enable overlapping instances, or autoscale this service.
+
+Configure the provider's readiness/health-check path as `/healthz`. Production startup also checks the database path and mount directory. When the configured database has no accounts, startup requires the bootstrap token; after an account exists, it can be removed. Production Swagger, ReDoc, and OpenAPI endpoints are disabled.
+
+### 4. Configure the Vercel frontend
+
+In the Vercel project settings, set `VITE_API_BASE_URL` to the backend's exact public HTTPS API base URL, with no path suffix. Trigger a new frontend build after changing it because Vite embeds this value at build time. Set the same frontend's exact HTTPS origin in the backend's `SECURCODE_ALLOWED_ORIGINS`. The Vite localhost proxy is development-only; production builds require a configured HTTPS API base URL.
+
+### 5. Configure HTTPS and verify
+
+Use the provider's TLS termination, redirect HTTP to HTTPS, and add HSTS at the hosting edge. The API emits `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, and a restrictive Content Security Policy, but it does not set HSTS. Configure appropriate response security headers for the Vercel frontend as well.
+
+Before allowing use, verify:
+
+1. `https://<backend-host>/healthz` returns healthy.
+2. HTTP requests redirect to HTTPS and HTTPS responses include HSTS.
+3. The Vercel frontend origin is exactly allowed by API CORS; an unrelated origin is not allowed.
+4. The running service's `SECURCODE_DATABASE_PATH` points inside the mounted disk, and the health check reports the database available.
+5. After administrator bootstrap, remove `SECURCODE_BOOTSTRAP_TOKEN`, restart, and verify login still works.
+6. Register a project whose source path is present in the backend workspace, scan it, and verify the resulting scan persists after restarting the service.
+7. Create a separate backup and complete an isolated restore rehearsal using the procedures below.
+
+The application cannot prove that a provider mount is durable or correctly protected. Provider disk provisioning, access controls, restart persistence, backup retention, and recovery must be verified by the operator. No production service or Vercel deployment is configured or verified by this guide.
+
 ## Private authenticated production
 
 SQLite is the only supported application database. Before starting a private production service:
@@ -18,72 +88,31 @@ The public Render demo is intentionally separate from this private-production pr
 
 ## SQLite backup and restore
 
-The schema initializer applies idempotent additive migrations on API startup and records versions in `schema_migrations`. Preserve a backup before application upgrades or storage changes. No scheduled backup, retention, encryption, or automated restore is implemented by SecurCode.
+The schema initializer applies idempotent additive migrations on API startup and records versions in `schema_migrations`. Startup opens only the configured `SECURCODE_DATABASE_PATH`; it does not search for, copy, replace, or overwrite another database. A missing configured file is initialized as a new database, so verify the mounted path before starting the service. No scheduled backup, retention, encryption, or automatic database switch is implemented by SecurCode.
 
-Create an online consistent backup with Python's SQLite backup API. The target must not already exist. Set the source to the exact database path used by the API and store the backup on a separate, access-controlled destination:
+Connections enable foreign-key enforcement and a 10-second busy timeout. The application does not change `journal_mode`; fresh databases use SQLite's default rollback journal (`DELETE`). If WAL is enabled operationally, the mounted filesystem must support SQLite's WAL shared-memory and locking requirements. Keep the database on a provider-supported persistent filesystem and the API to one process and one replica. The online backup API is used for consistent backups, including when journal state needs coordination.
+
+Create a backup with the repository utility. The source must be the exact path used by the API; the destination directory must already exist, and the backup destination must be new. The utility opens the source read-only, uses SQLite's online backup API, and checks both `integrity_check` and `foreign_key_check` before reporting success. Store the result on a separate, access-controlled destination:
 
 ```powershell
 $env:SECURCODE_DATABASE_PATH = "D:\securcode-data\sentinelops.db"
 $env:SECURCODE_BACKUP_PATH = "E:\securcode-backups\sentinelops-2026-11-06.sqlite"
-@'
-import os
-import sqlite3
-from pathlib import Path
-
-source_path = Path(os.environ["SECURCODE_DATABASE_PATH"])
-backup_path = Path(os.environ["SECURCODE_BACKUP_PATH"])
-if not source_path.is_file():
-    raise SystemExit("Configured source database does not exist.")
-if backup_path.exists() or not backup_path.parent.is_dir():
-    raise SystemExit("Backup target exists or its destination directory is missing.")
-source = sqlite3.connect(source_path.resolve().as_uri() + "?mode=ro", uri=True)
-try:
-    with sqlite3.connect(backup_path) as backup:
-        source.backup(backup)
-        if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise SystemExit("Backup integrity check failed.")
-finally:
-    source.close()
-print("Backup completed and passed SQLite integrity_check.")
-'@ | & .\backend\.venv\Scripts\python.exe -
+& .\backend\.venv\Scripts\python.exe .\scripts\sqlite_backup_restore.py backup $env:SECURCODE_DATABASE_PATH $env:SECURCODE_BACKUP_PATH
 ```
 
 Protect and encrypt backup files according to the data classification of scanned project metadata. Retain them separately from the service volume. Do not treat a successful backup command as a recovery test.
 
-To rehearse recovery, use a new empty path in an isolated location; never restore over the live database during a rehearsal. Stop the target API before a real restore, preserve its current database separately without overwriting an existing copy, and restore only a verified backup:
+To rehearse recovery, restore to a new path in an isolated location; never restore over the live database during a rehearsal. The restore utility verifies the source backup before copying, verifies the restored database afterward, and refuses an existing destination. It never switches or replaces the configured database:
 
 ```powershell
 $env:SECURCODE_BACKUP_PATH = "E:\securcode-backups\sentinelops-2026-11-06.sqlite"
 $env:SECURCODE_RESTORE_PATH = "D:\securcode-recovery-test\sentinelops-restored.sqlite"
-@'
-import os
-import sqlite3
-from pathlib import Path
-
-backup_path = Path(os.environ["SECURCODE_BACKUP_PATH"])
-restore_path = Path(os.environ["SECURCODE_RESTORE_PATH"])
-if not backup_path.is_file():
-    raise SystemExit("Backup file does not exist.")
-if restore_path.exists() or not restore_path.parent.is_dir():
-    raise SystemExit("Restore target exists or its destination directory is missing.")
-source = sqlite3.connect(backup_path.resolve().as_uri() + "?mode=ro", uri=True)
-try:
-    if source.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-        raise SystemExit("Backup integrity check failed.")
-    with sqlite3.connect(restore_path) as restored:
-        source.backup(restored)
-        if restored.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-            raise SystemExit("Restored database integrity check failed.")
-        versions = [row[0] for row in restored.execute(
-            "SELECT version FROM schema_migrations ORDER BY version"
-        )]
-        print(f"Restore verified; applied schema versions: {versions}")
-finally:
-    source.close()
-'@ | & .\backend\.venv\Scripts\python.exe -
+& .\backend\.venv\Scripts\python.exe .\scripts\sqlite_backup_restore.py restore $env:SECURCODE_BACKUP_PATH $env:SECURCODE_RESTORE_PATH
 ```
 
-The repository test suite also backs up and restores a temporary database, checks `PRAGMA integrity_check`, verifies retained scan data, and checks migration versions 1 through 7. A successful local test does not replace a recovery rehearsal on the actual hosting volume.
+For a real recovery, stop the API first. Restore to a new file on the durable volume and confirm the successful integrity/foreign-key checks and the expected SecurCode data before changing the service's `SECURCODE_DATABASE_PATH` to that restored file and restarting. Do not overwrite or delete the previous database as part of the switch; retain it until service health and the restored accounts, findings, scan history, and assignments have been checked. The application startup performs additive schema migrations, so restore with a compatible application version and retain a separate pre-upgrade backup.
+
+The isolated repository tests verify restart persistence and that a restore retains an administrator, findings, scan history, assignment state/history, and schema versions. They use only temporary databases. A successful local test does not establish that a provider volume is durable, correctly mounted, or recoverable; complete a restore rehearsal on the selected hosting service.
 
 ## Release checks
 

@@ -5,7 +5,7 @@
 - `backend/app/main.py` creates the FastAPI app, validates CORS configuration, applies bearer-session/project authorization and baseline API security headers, exposes database-backed readiness, and starts the lightweight demo-directory watcher.
 - `backend/config.py` validates environment settings for demo mode, exact web origins, SQLite location, and scan resource limits. Private production requires an absolute database path whose parent directory already exists.
 - `backend/app/api/routes.py` owns scan submission, scan history, health, statistics, path validation, and public path redaction.
-- `backend/app/api/platform_routes.py` owns project management, finding lifecycle, audit queries, incidents, dashboard summaries, scan comparison, and CSV reporting.
+- `backend/app/api/platform_routes.py` owns project management, finding lifecycle, audit queries, incidents, dashboard summaries, scan comparison, and CSV/SARIF reporting.
 - `backend/database.py` owns SQLite connections, additive schema initialization, scan persistence, findings state/comments, project records, incidents, status history, and hash-chained audit events.
 - `backend/security_engine/scanner/` provides Python AST rules and bounded intra-file taint propagation, lightweight lexical JavaScript/TypeScript rules, bounded scan discovery, stable finding metadata, and remediation guidance.
 - `backend/security_engine/integrations.py` provides opt-in Semgrep, Bandit, Gitleaks execution and SARIF normalization; Trivy remains in its dedicated adapter.
@@ -15,7 +15,9 @@ The schema initializer applies idempotent additive changes at application startu
 
 ## Finding identity and risk index
 
-Finding IDs are SHA-256 fingerprints of project path, language, rule ID, source filename, and line number. This carries status across repeat scans when the finding remains at the same location. Moving code to a different line changes the ID; there is no semantic code fingerprint yet. A finding that is detected again after Resolved is reopened. Accepted Risk and False Positive states carry forward.
+Finding IDs are SHA-256 fingerprints of project path, language, rule ID, source filename, and line number. When multiple same-rule occurrences share a line, later occurrences additionally include their column so they are not collapsed; the first occurrence retains its previous location fingerprint. This carries status across repeat scans at the same location. Moving code to a different line changes the ID; there is no semantic code fingerprint yet. A finding that is detected again after Resolved is reopened. Accepted Risk and False Positive states carry forward.
+
+Finding detail derives a follow-up check from the latest later scan for the same project. A matching fingerprint is reported as detected; absence from a completed scan is reported as not detected, not as verified remediation. A partial or failed scan is inconclusive, and a human still needs to confirm a fix.
 
 The dashboard severity and lifecycle distributions use the latest observation for each finding fingerprint. Scan and finding totals remain historical totals. The risk posture index starts at 100 and subtracts 25 per current Critical, 10 per High, 4 per Medium, and 1 per Low Open or In Progress finding, with a floor of 0. This is an operational triage index; it is not a probability of breach or a compliance score.
 

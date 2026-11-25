@@ -18,8 +18,8 @@ PLACEHOLDER_VALUES = {
 }
 
 
-def _finding(severity, confidence, test_id, filename, line_number, description):
-    return {
+def _finding(severity, confidence, test_id, filename, line_number, description, column_number=None):
+    finding = {
         "severity": severity,
         "confidence": confidence,
         "test_id": test_id,
@@ -30,6 +30,21 @@ def _finding(severity, confidence, test_id, filename, line_number, description):
         "remediation": remediation_for(test_id),
         "cwe": cwe_for(test_id),
     }
+    if column_number is not None:
+        finding["column_number"] = column_number
+    return finding
+
+
+def _source_column_number(source, node):
+    line_number = getattr(node, "lineno", None)
+    byte_offset = getattr(node, "col_offset", None)
+    if line_number is None or byte_offset is None:
+        return None
+    lines = source.splitlines()
+    if line_number < 1 or line_number > len(lines):
+        return None
+    prefix = lines[line_number - 1].encode("utf-8")[:byte_offset]
+    return len(prefix.decode("utf-8", errors="ignore")) + 1
 
 
 def _constant_string(node):
@@ -122,9 +137,10 @@ class _PythonTaintAnalysis(ast.NodeVisitor):
     SQL_SINKS = {"execute", "executemany", "query", "raw"}
     NETWORK_SINKS = {"get", "post", "put", "patch", "delete", "urlopen", "request"}
 
-    def __init__(self, filename, tree=None, call_depth=0):
+    def __init__(self, filename, tree=None, call_depth=0, source=""):
         self.filename = filename
         self.call_depth = call_depth
+        self.source = source
         self.functions = {
             node.name: node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         } if tree is not None else {}
@@ -217,6 +233,7 @@ class _PythonTaintAnalysis(ast.NodeVisitor):
             "language": "Python",
             "filename": self.filename,
             "line_number": node.lineno,
+            "column_number": _source_column_number(self.source, node),
             "description": description,
             "remediation": remediation_for(rule),
             "cwe": cwe,
@@ -300,7 +317,9 @@ class _PythonTaintAnalysis(ast.NodeVisitor):
         if self.call_depth < 2 and isinstance(node.func, ast.Name) and node.func.id in self.functions:
             function = self.functions[node.func.id]
             parameters = [*function.args.posonlyargs, *function.args.args]
-            child = _PythonTaintAnalysis(self.filename, tree=None, call_depth=self.call_depth + 1)
+            child = _PythonTaintAnalysis(
+                self.filename, tree=None, call_depth=self.call_depth + 1, source=self.source
+            )
             child.module_aliases = dict(self.module_aliases)
             child.function_aliases = dict(self.function_aliases)
             for parameter, argument in zip(parameters, node.args):
@@ -357,7 +376,7 @@ def scan_python_file(filename):
 
     findings = []
 
-    taint_analysis = _PythonTaintAnalysis(filename, tree=tree)
+    taint_analysis = _PythonTaintAnalysis(filename, tree=tree, source=source)
     taint_analysis.visit(tree)
     findings.extend(taint_analysis.findings)
 
@@ -370,6 +389,7 @@ def scan_python_file(filename):
                 filename,
                 node.lineno,
                 "Hardcoded credential-like value detected. Load secrets from a managed secret store or environment configuration.",
+                _source_column_number(source, node),
             ))
 
         if not isinstance(node, ast.Call):
@@ -383,6 +403,7 @@ def scan_python_file(filename):
                 filename,
                 node.lineno,
                 "Use of eval() detected. Avoid dynamic evaluation and parse input with an explicit data format.",
+                _source_column_number(source, node),
             ))
 
         subprocess_call = _call_is(node, "subprocess", {"call", "run", "Popen", "check_call", "check_output"}, module_aliases, function_aliases)
@@ -397,6 +418,7 @@ def scan_python_file(filename):
                 filename,
                 node.lineno,
                 "subprocess.call() detected. Prefer an argument list and validate command inputs; shell=True requires extra care to avoid shell interpretation.",
+                _source_column_number(source, node),
             ))
 
         if (
@@ -410,6 +432,7 @@ def scan_python_file(filename):
                 filename,
                 node.lineno,
                 "OS command execution detected. Prefer a fixed executable with a validated argument list.",
+                _source_column_number(source, node),
             ))
 
         if any(_call_is(node, module, {"load", "loads"}, module_aliases, function_aliases) for module in ("pickle", "dill", "marshal")):
@@ -420,6 +443,7 @@ def scan_python_file(filename):
                 filename,
                 node.lineno,
                 "Unsafe deserialization detected. Do not deserialize untrusted bytes with pickle, dill, or marshal.",
+                _source_column_number(source, node),
             ))
 
         yaml_load = _call_is(node, "yaml", {"load", "unsafe_load"}, module_aliases, function_aliases)
@@ -444,6 +468,7 @@ def scan_python_file(filename):
                     filename,
                     node.lineno,
                     "Unsafe YAML deserialization detected. Use safe_load or an explicitly safe loader for untrusted content.",
+                    _source_column_number(source, node),
                 ))
 
         if isinstance(node.func, ast.Attribute) and node.func.attr in {"execute", "executemany"} and node.args:
@@ -455,6 +480,7 @@ def scan_python_file(filename):
                     filename,
                     node.lineno,
                     "SQL is assembled dynamically before execution. Use parameterized query arguments instead of string interpolation.",
+                    _source_column_number(source, node),
                 ))
 
     return findings

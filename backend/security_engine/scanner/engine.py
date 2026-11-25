@@ -152,6 +152,7 @@ def scan_project(path):
     target = Path(path)
     findings = []
     seen = set()
+    seen_columns = {}
     errors = []
     scanned_files = 0
     discovered_files = 0
@@ -203,14 +204,20 @@ def scan_project(path):
             scanned_files += 1
             scanned_bytes += file_size
             for finding in file_findings:
-                key = (
+                location = (
                     finding.get("language"),
                     finding.get("test_id"),
                     finding.get("filename"),
                     finding.get("line_number"),
                 )
+                column_number = finding.get("column_number")
+                key = (*location, column_number) if isinstance(column_number, int) else location
                 if key not in seen:
                     seen.add(key)
+                    same_location_columns = seen_columns.setdefault(location, set())
+                    if same_location_columns and isinstance(column_number, int):
+                        finding["_include_column_in_fingerprint"] = True
+                    same_location_columns.add(column_number)
                     findings.append(finding)
             if monotonic() - scan_started >= max_scan_seconds:
                 errors.append({

@@ -194,6 +194,10 @@ test("administrator login, project registration, scan, findings, and report expo
   const findingRow = page.locator("main tbody tr").first();
   await expect(findingRow).toBeVisible();
   await findingRow.getByRole("button", { name: "Evidence and history" }).click();
+  await expect(page.locator(".detail-panel")).toContainText(
+    "No subsequent scan is available to check this finding.",
+  );
+  await expect(page.locator(".detail-panel")).toContainText("Observed in 1 recorded scan.");
   await page.getByLabel("Assignee").fill("unknown-assignee");
   await page.getByRole("button", { name: "Save assignment" }).click();
   await expect(page.getByRole("alert")).toHaveText(
@@ -214,6 +218,11 @@ test("administrator login, project registration, scan, findings, and report expo
   expect(assignmentRequests).toBe(1);
   await expect(page.locator(".detail-panel dl")).toContainText("admin");
   await expect(findingRow).toContainText("admin");
+  await findingRow.getByLabel("Finding status").selectOption("False Positive");
+  await page.getByLabel("Justification").fill("Confirmed safe after manual review.");
+  await page.getByRole("button", { name: "Save False Positive" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Finding status saved." })).toBeVisible();
+  await expect(page.locator(".detail-panel dl")).toContainText("Confirmed safe after manual review.");
 
   await navigation.getByRole("button", { name: "Reports" }).click();
   await expect(page.getByText("Finding export")).toBeVisible();
@@ -231,6 +240,20 @@ test("administrator login, project registration, scan, findings, and report expo
   expect(await readFile(await download.path(), "utf8")).toContain(
     "severity,status,rule_id,language",
   );
+  const sarifResponsePromise = page.waitForResponse((response) =>
+    response.url().endsWith("/reports/findings.sarif"),
+  );
+  const sarifDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download findings SARIF" }).click();
+  const sarifDownload = await sarifDownloadPromise;
+  const sarifResponse = await sarifResponsePromise;
+  expect(sarifResponse.status()).toBe(200);
+  expect(sarifResponse.headers()["content-type"]).toContain("application/sarif+json");
+  expect(sarifDownload.suggestedFilename()).toBe("securcode-findings.sarif");
+  expect(await sarifDownload.failure()).toBeNull();
+  const sarif = JSON.parse(await readFile(await sarifDownload.path(), "utf8"));
+  expect(sarif.version).toBe("2.1.0");
+  expect(sarif.runs[0].results[0].properties.status).toBe("False Positive");
 
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Sign in to SecurCode" })).toBeVisible();

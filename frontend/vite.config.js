@@ -9,9 +9,24 @@ export default defineConfig(({ mode }) => {
     if (!apiBaseUrl) {
       throw new Error("Set VITE_API_BASE_URL to the public HTTPS API URL before building for production.");
     }
-    const apiUrl = new URL(apiBaseUrl);
-    if (apiUrl.protocol !== "https:") {
-      throw new Error("VITE_API_BASE_URL must use HTTPS for production builds.");
+    let apiUrl;
+    try {
+      apiUrl = new URL(apiBaseUrl);
+    } catch {
+      throw new Error("VITE_API_BASE_URL must be a valid public HTTPS API origin.");
+    }
+    if (
+      apiUrl.protocol !== "https:"
+      || !apiUrl.hostname
+      || apiUrl.username
+      || apiUrl.password
+      || apiUrl.pathname !== "/"
+      || apiUrl.search
+      || apiUrl.hash
+    ) {
+      throw new Error(
+        "VITE_API_BASE_URL must be an HTTPS origin without credentials, path, query, or fragment.",
+      );
     }
   }
 

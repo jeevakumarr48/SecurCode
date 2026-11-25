@@ -133,18 +133,20 @@ For local development, leave SECURCODE_ENV unset and continue using the existing
 - `GET /stats` returns total scans, total findings, high-severity findings, and the latest scan.
 - `GET /dashboard` returns current per-fingerprint severity and remediation counts, recent activity, affected projects, incident summary, trends, and a documented risk posture index.
 - `GET /projects`, `POST /projects`, `GET /projects/{id}`, `PATCH /projects/{id}`, and `POST /projects/{id}/scan` provide project registration and local workspace scan workflows. Project paths must already exist inside the workspace. A registered repository URL is metadata only; remote repositories are not fetched or scanned.
-- `GET /findings` supports status, severity, language, text search, project filtering, and pagination. `GET /findings/{scan_id}/{finding_index}` includes status history and related incidents. `PATCH /findings/{scan_id}/{finding_index}/status` persists lifecycle changes.
+- `GET /findings` supports status, severity, language, text search, project filtering, and pagination. `GET /findings/{scan_id}/{finding_index}` includes status history, repeat-scan count, follow-up scan check, and related incidents. `PATCH /findings/{scan_id}/{finding_index}/status` persists lifecycle changes.
 - `GET /scans/{scan_id}/comparison` compares findings with the prior scan for that project. A finding absent from a later scan is described as “no longer detected”; this does not verify remediation.
 - `GET /incidents`, `POST /incidents`, `GET /incidents/{id}`, and `PATCH /incidents/{id}` manage incidents and related finding references.
 - `GET /audit` provides paginated audit events. Audit metadata avoids status notes, descriptions, and source contents.
 - `GET /audit/integrity` verifies the local audit hash chain and returns the first invalid event when tampering or corruption is detected.
-- `GET /reports/summary` returns persisted posture data. `GET /reports/findings.csv` exports up to 200 findings and escapes spreadsheet formula prefixes.
+- `GET /reports/summary` returns persisted posture data. `GET /reports/findings.csv` and `GET /reports/findings.sarif` export up to 200 current findings with scan metadata, affected paths, severity, and remediation guidance. CSV escapes spreadsheet formula prefixes.
 - `GET /integrations/status` reports optional scanner availability. `POST /integrations/{tool}/scan` runs an available Semgrep, Bandit, Gitleaks, or Trivy scanner against a registered project; scanner calls are opt-in, timeout-bounded, and require PATH installation. Semgrep requires a local rules file via `SECURCODE_SEMGREP_CONFIG` and does not fetch rules automatically. `POST /integrations/sarif/import` imports normalized SARIF findings into a registered project's scan history.
 - `GET /healthz` checks API and SQLite readiness.
 
-Every finding includes `severity`, `confidence`, `test_id`, `language`, `filename`, `line_number`, `description`, a location-based `finding_id`, and rule-specific `remediation`. Selected Python and imported SARIF findings include CWE mappings; other mappings are limited to the documented rules. Existing stored findings without newer fields remain readable by the dashboard.
+Every finding includes `severity`, `confidence`, `test_id`, `language`, `filename`, `line_number`, `column_number`, `description`, a location-based `finding_id`, and rule-specific `remediation`. Selected Python and imported SARIF findings include CWE mappings; other mappings are limited to the documented rules. Existing stored findings without newer fields remain readable by the dashboard.
 
-Finding IDs combine project path, language, rule ID, source filename, and line number. Status carries forward when the next scan reports the same location. A moved finding receives a new ID; there is no semantic code fingerprint yet. If a finding reappears after being marked Resolved, it returns to Open.
+Finding IDs combine project path, language, rule ID, source filename, and line number. Same-rule occurrences on the same line are separated by column after the first occurrence. Status carries forward when the next scan reports the same location. A moved finding receives a new ID; there is no semantic code fingerprint yet. If a finding reappears after being marked Resolved, it returns to Open.
+
+Finding detail reports whether the latest subsequent scan completed and whether it detected the same fingerprint. A clean completed scan reports “not detected,” not “fixed”; manual review is still required. Partial or failed subsequent scans are inconclusive.
 
 The dashboard risk posture index starts at 100 and subtracts 25 per current Critical, 10 per High, 4 per Medium, and 1 per Low Open or In Progress finding, floored at 0. Severity and lifecycle distributions use the latest observation per finding ID; scan totals remain historical totals. This index is a triage aid, not a breach probability or compliance score.
 

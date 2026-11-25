@@ -2,6 +2,8 @@
 
 The built-in rules are leads for review. The fixture benchmark in `backend/reports/scanner-benchmark.json` measures only the curated cases named by that suite; its scores are not estimates of real-world detection quality.
 
+Routing supports Python (`.py`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), and TypeScript (`.ts`, `.tsx`) source files. Findings include one-based source line and column locations. Project scans keep multiple same-rule occurrences on one line distinct by column; line movement still changes the finding identity.
+
 Current fixture run: see `backend/reports/scanner-benchmark.json`; rerun `python -m security_engine.benchmark` for current results. Scores apply only to these curated fixtures and are not estimates of real-world detection quality. Counts are rule-presence per fixture, not individual finding counts.
 
 | Rule | Language | Current behavior | CWE |

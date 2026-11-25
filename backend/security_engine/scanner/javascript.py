@@ -11,8 +11,8 @@ SECRET_PATTERN = re.compile(
 )
 
 
-def _finding(severity, confidence, test_id, language, filename, line_number, description):
-    return {
+def _finding(severity, confidence, test_id, language, filename, line_number, description, column_number=None):
+    finding = {
         "severity": severity,
         "confidence": confidence,
         "test_id": test_id,
@@ -23,6 +23,13 @@ def _finding(severity, confidence, test_id, language, filename, line_number, des
         "remediation": remediation_for(test_id),
         "cwe": cwe_for(test_id),
     }
+    if column_number is not None:
+        finding["column_number"] = column_number
+    return finding
+
+
+def _column_number(source, offset):
+    return offset - source.rfind("\n", 0, offset)
 
 
 def _is_comment_only(line):
@@ -133,6 +140,7 @@ def scan_javascript_file(filename):
                 filename,
                 line_number,
                 "Hardcoded credential-like value detected. Load secrets from environment configuration or a managed secret store.",
+                secret_match.start() + 1,
             ))
 
     call_rules = (
@@ -143,7 +151,10 @@ def scan_javascript_file(filename):
     for pattern, rule_id, confidence, description in call_rules:
         for match in re.finditer(pattern, code, flags=re.MULTILINE):
             line_number = code.count("\n", 0, match.start()) + 1
-            findings.append(_finding("HIGH", confidence, rule_id, language, filename, line_number, description))
+            findings.append(_finding(
+                "HIGH", confidence, rule_id, language, filename, line_number, description,
+                _column_number(code, match.start()),
+            ))
 
     command_aliases = {
         match.group(1)
@@ -166,6 +177,7 @@ def scan_javascript_file(filename):
                 filename,
                 line_number,
                 "Shell command execution detected through an aliased child_process.exec API. Prefer a fixed executable and validated argument list over exec().",
+                _column_number(code, match.start()),
             ))
 
     spawn_pattern = re.compile(r"\b(?:spawn|spawnSync)\s*\(")
@@ -189,6 +201,7 @@ def scan_javascript_file(filename):
             findings.append(_finding(
                 "HIGH", "HIGH", "JSSEC004", language, filename, line_number,
                 "Child-process spawning enables shell interpretation. Avoid shell:true with untrusted or concatenated input.",
+                _column_number(code, match.start()),
             ))
 
     return findings

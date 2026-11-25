@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
 from config import settings
@@ -10,17 +11,35 @@ from config import settings
 DATABASE_PATH = settings.database_path
 
 
+@contextmanager
 def get_connection():
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DATABASE_PATH, timeout=10)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 10000")
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 10000")
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
+def _execute_script(connection, script):
+    statement = ""
+    for line in script.splitlines():
+        statement += line + "\n"
+        if sqlite3.complete_statement(statement):
+            if statement.strip():
+                connection.execute(statement)
+            statement = ""
+    if statement.strip():
+        raise sqlite3.ProgrammingError("Incomplete SQL statement in schema script.")
 
 
 def initialize_database():
     with get_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         connection.execute("""
             CREATE TABLE IF NOT EXISTS scans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +63,7 @@ def initialize_database():
             )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_scans_created_at ON scans(created_at DESC, id DESC)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_scans_project_path ON scans(project_path)")
-        connection.executescript("""
+        _execute_script(connection, """
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
                 applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -214,7 +233,7 @@ def initialize_database():
             if column not in scan_columns:
                 connection.execute(f"ALTER TABLE scans ADD COLUMN {column} {definition}")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_scans_commit ON scans(commit_sha, branch_name, id DESC)")
-        connection.executescript("""
+        _execute_script(connection, """
             CREATE TABLE IF NOT EXISTS auth_users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -250,7 +269,7 @@ def initialize_database():
         connection.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)")
 
 
-def save_scan(project_path, result, git_metadata=None):
+def save_scan(project_path, result, git_metadata=None, actor="system"):
     git_metadata = git_metadata or {}
     with get_connection() as connection:
         connection.execute(
@@ -299,7 +318,7 @@ def save_scan(project_path, result, git_metadata=None):
             "partial": "scan.partial",
             "failed": "scan.failed",
         }.get(result["status"], "scan.recorded")
-        record_audit_event(connection, "system", scan_action, "scan", str(scan_id), {
+        record_audit_event(connection, actor, scan_action, "scan", str(scan_id), {
             "project_path": project_path,
             "status": result["status"],
             "total_findings": result["total_findings"],
@@ -542,21 +561,21 @@ def _backfill_audit_hashes(connection):
 
 
 def verify_audit_chain(connection=None):
-    owns_connection = connection is None
-    if owns_connection:
-        connection = get_connection()
-    try:
-        previous_hash = "0" * 64
-        for row in connection.execute("SELECT * FROM audit_events ORDER BY id"):
-            expected = _audit_digest(previous_hash, row["actor"], row["action"], row["resource_type"],
-                                     row["resource_id"], row["outcome"], row["metadata_json"], row["created_at"])
-            if row["previous_hash"] != previous_hash or row["event_hash"] != expected:
-                return {"valid": False, "event_id": row["id"]}
-            previous_hash = expected
-        return {"valid": True, "event_id": None}
-    finally:
-        if owns_connection:
-            connection.close()
+    if connection is None:
+        with get_connection() as owned_connection:
+            return _verify_audit_chain(owned_connection)
+    return _verify_audit_chain(connection)
+
+
+def _verify_audit_chain(connection):
+    previous_hash = "0" * 64
+    for row in connection.execute("SELECT * FROM audit_events ORDER BY id"):
+        expected = _audit_digest(previous_hash, row["actor"], row["action"], row["resource_type"],
+                                 row["resource_id"], row["outcome"], row["metadata_json"], row["created_at"])
+        if row["previous_hash"] != previous_hash or row["event_hash"] != expected:
+            return {"valid": False, "event_id": row["id"]}
+        previous_hash = expected
+    return {"valid": True, "event_id": None}
 
 
 def finding_fingerprint(project_path, finding):
@@ -568,4 +587,6 @@ def finding_fingerprint(project_path, finding):
         str(finding.get("filename", "")).replace("\\", "/"),
         str(finding.get("line_number", "")),
     )
+    if finding.get("_include_column_in_fingerprint"):
+        fields += (str(finding.get("column_number", "")),)
     return hashlib.sha256("\0".join(fields).encode("utf-8", errors="replace")).hexdigest()

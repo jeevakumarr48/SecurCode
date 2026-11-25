@@ -2,14 +2,17 @@
 
 import asyncio
 import json
+import re
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 from pydantic import ValidationError
 from urllib.parse import urlencode
 
 import database
+from app import auth
 from app.api import platform_routes, routes
-from app.main import app
+from app.main import PUBLIC_PATHS, app
 
 _HTTP_TEST_TOKEN = None
 
@@ -252,6 +255,35 @@ def test_finding_identity_and_status_survive_rescans_and_reopen_if_detected(plat
     assert platform_routes.finding_detail(third_scan, 0)["status"] == "Open"
 
 
+def test_finding_verification_uses_latest_scan_and_does_not_overclaim_remediation(platform_db):
+    first_scan = _saved_scan()
+    initial = platform_routes.finding_detail(first_scan, 0)
+    assert initial["occurrence_count"] == 1
+    assert initial["verification"]["status"] == "pending"
+
+    clean_scan = database.save_scan("src", {
+        "status": "completed", "total_findings": 0, "findings": [],
+    })
+    absent = platform_routes.finding_detail(first_scan, 0)
+    assert absent["verification"]["status"] == "not_detected"
+    assert absent["verification"]["scan_id"] == clean_scan
+    assert "manual confirmation is still required" in absent["verification"]["message"]
+
+    recurring_scan = _saved_scan()
+    recurring = platform_routes.finding_detail(first_scan, 0)
+    assert recurring["verification"]["status"] == "detected"
+    assert recurring["verification"]["scan_id"] == recurring_scan
+    assert recurring["occurrence_count"] == 2
+
+    partial_scan = database.save_scan("src", {
+        "status": "partial", "total_findings": 0, "findings": [],
+        "errors": [{"path": "src/unsafe.py", "message": "Source traversal was partial."}],
+    })
+    inconclusive = platform_routes.finding_detail(first_scan, 0)
+    assert inconclusive["verification"]["status"] == "inconclusive"
+    assert inconclusive["verification"]["scan_id"] == partial_scan
+
+
 def test_public_demo_scopes_findings_and_disables_lifecycle_changes(platform_db, monkeypatch):
     private_scan = _saved_scan("private-project")
     demo_scan = _saved_scan("backend/app/api/docs/security-demo", "MEDIUM")
@@ -285,9 +317,27 @@ def test_api_responses_include_security_headers(platform_db):
     assert headers[b"x-frame-options"] == b"DENY"
     assert headers[b"referrer-policy"] == b"no-referrer"
     assert headers[b"permissions-policy"] == b"camera=(), microphone=(), geolocation=()"
+    assert headers[b"cache-control"] == b"no-store"
+    assert headers[b"pragma"] == b"no-cache"
     assert headers[b"content-security-policy"] == (
         b"default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     )
+    assert b"set-cookie" not in headers
+
+
+def test_every_sensitive_api_route_requires_authentication(platform_db):
+    protected_routes = [
+        (method, re.sub(r"\{[^}]+\}", "1", route.path))
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods or ()
+        if method not in {"OPTIONS"}
+        and route.path not in PUBLIC_PATHS
+    ]
+
+    assert protected_routes
+    for method, path in protected_routes:
+        assert _asgi_request(path, method)[0] == 401, (method, path)
 
 
 def test_demo_cooldown_is_shared_through_sqlite(platform_db, monkeypatch):
@@ -442,6 +492,71 @@ def test_vulnerability_dedup_assignment_comments_and_suppression_justification(p
     assert {"finding.assigned", "finding.commented"}.issubset(audit_actions)
 
 
+def test_sarif_export_includes_finding_and_scan_metadata_without_absolute_paths(platform_db):
+    database.save_scan("src", {
+        "status": "completed",
+        "total_findings": 1,
+        "findings": [{
+            "severity": "HIGH",
+            "confidence": "HIGH",
+            "test_id": "PYSEC007",
+            "language": "Python",
+            "filename": r"C:\Users\private-user\src\db.py",
+            "line_number": 12,
+            "column_number": 7,
+            "description": "Untrusted data reaches SQL execution.",
+            "remediation": "Use parameterized SQL.",
+            "cwe": "CWE-89",
+        }],
+    })
+
+    report = platform_routes.findings_sarif()
+    payload = json.loads(report.body)
+    run = payload["runs"][0]
+    result = run["results"][0]
+
+    assert payload["version"] == "2.1.0"
+    assert report.media_type == "application/sarif+json; charset=utf-8"
+    assert run["tool"]["driver"]["rules"][0]["id"] == "PYSEC007"
+    assert "external/cwe/CWE-89" in run["tool"]["driver"]["rules"][0]["properties"]["tags"]
+    assert result["level"] == "error"
+    assert result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] == "outside-workspace"
+    assert result["locations"][0]["physicalLocation"]["region"]["startLine"] == 12
+    assert result["locations"][0]["physicalLocation"]["region"]["startColumn"] == 7
+    assert result["properties"]["remediation"] == "Use parameterized SQL."
+    assert result["properties"]["projectPath"] == "src"
+    assert run["properties"]["scans"][0]["status"] == "completed"
+    assert "private-user" not in report.body.decode("utf-8")
+
+
+def test_same_line_findings_remain_distinct_across_scan_history(platform_db):
+    source = platform_db / "duplicate_calls.js"
+    source.write_text("eval(first); eval(second)\n", encoding="utf-8")
+
+    def save_current_scan():
+        result = routes._public_scan_result(routes.scan_project(str(source)), "duplicate_calls.js")
+        return database.save_scan("duplicate_calls.js", result)
+
+    first_scan_id = save_current_scan()
+    first = platform_routes.list_findings(search="", limit=50, offset=0)["findings"]
+    second_scan_id = save_current_scan()
+    latest = platform_routes.list_findings(search="", limit=50, offset=0)["findings"]
+    comparison = platform_routes.compare_scan(second_scan_id)
+    history = routes.scan_history()["scans"]
+
+    assert len(first) == len(latest) == 2
+    assert len({finding["finding_id"] for finding in latest}) == 2
+    assert {finding["column_number"] for finding in latest} == {1, 14}
+    assert all("_include_column_in_fingerprint" not in finding for finding in latest)
+    assert {finding["finding_id"] for scan in history[0:1] for finding in scan["findings"]} == {
+        finding["finding_id"] for finding in latest
+    }
+    assert comparison["compared_to_scan_id"] == first_scan_id
+    assert comparison["unchanged_count"] == 2
+    assert comparison["added"] == []
+    assert comparison["no_longer_detected"] == []
+
+
 def test_notifications_are_deduplicated_persisted_and_marked_read(platform_db):
     _saved_scan(severity="CRITICAL")
     notifications = platform_routes.list_notifications(unread_only=False, limit=50, offset=0)
@@ -550,6 +665,10 @@ def test_project_membership_blocks_cross_project_access(platform_db, monkeypatch
     assert _asgi_request(f"/projects/{project_ids[1]}")[0] == 200
     assert _asgi_request(f"/projects/{project_ids[0]}")[0] == 404
     assert _asgi_request(f"/projects/{project_ids[0]}/scan", "POST")[0] == 404
+    assert _asgi_request(f"/projects/{project_ids[0]}/findings")[0] == 404
+    assert _asgi_request(
+        f"/scans/{scan_ids[0]}/comparison"
+    )[0] == 404
     assert _asgi_request(
         "/integrations/bandit/scan",
         "POST",
@@ -570,6 +689,31 @@ def test_project_membership_blocks_cross_project_access(platform_db, monkeypatch
         {"status": "Resolved"},
     )[0] == 404
     assert _asgi_request(
+        f"/findings/{scan_ids[0]}/0/assignee",
+        "PATCH",
+        {"assignee": "analyst-two"},
+    )[0] == 404
+    assert _asgi_request(
+        f"/findings/{scan_ids[0]}/0/comments",
+        "POST",
+        {"comment": "Unauthorized cross-project comment"},
+    )[0] == 404
+    assert _asgi_request(
+        f"/projects/{project_ids[0]}",
+        "PATCH",
+        {"name": "Unauthorized cross-project update"},
+    )[0] == 404
+    with database.get_connection() as connection:
+        protected_state = connection.execute(
+            "SELECT status, assignee FROM finding_states WHERE scan_id = ?",
+            (scan_ids[0],),
+        ).fetchone()
+        assert tuple(protected_state) == ("Open", None)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM finding_comments WHERE scan_id = ?",
+            (scan_ids[0],),
+        ).fetchone()[0] == 0
+    assert _asgi_request(
         f"/projects/{project_ids[1]}/members",
         "POST",
         {"user_id": users[0]["id"]},
@@ -583,6 +727,7 @@ def test_project_membership_blocks_cross_project_access(platform_db, monkeypatch
         "/audit",
         "/reports/summary",
         "/reports/findings.csv",
+        "/reports/findings.sarif",
     ):
         assert _asgi_request(path)[0] == 403
     _HTTP_TEST_TOKEN = admin_token
@@ -595,6 +740,200 @@ def test_project_membership_blocks_cross_project_access(platform_db, monkeypatch
     _HTTP_TEST_TOKEN = tokens[1]
     assert _asgi_request(f"/projects/{project_ids[0]}")[0] == 200
     assert _asgi_request("/projects")[2]["total"] == 2
+    assert not any(
+        "DELETE" in route.methods and "/findings/" in route.path
+        for route in app.routes
+        if isinstance(route, APIRoute)
+    )
+
+
+def test_authenticated_mutations_record_the_authenticated_actor(platform_db, monkeypatch):
+    global _HTTP_TEST_TOKEN
+    monkeypatch.setenv("SECURCODE_BOOTSTRAP_TOKEN", "test-bootstrap-token-with-at-least-32-bytes")
+    monkeypatch.setenv("SECURCODE_DEMO_MODE", "false")
+    _HTTP_TEST_TOKEN = None
+    status_code, _, bootstrap = _asgi_request("/auth/bootstrap", "POST", {
+        "username": "audited-admin",
+        "password": "audited-admin-password-long",
+        "bootstrap_token": "test-bootstrap-token-with-at-least-32-bytes",
+    })
+    assert status_code == 201
+    _HTTP_TEST_TOKEN = bootstrap["access_token"]
+
+    project_dir = platform_db / "audited-repository"
+    project_dir.mkdir()
+    (project_dir / "unsafe.py").write_text(
+        "import pickle\npickle.loads(payload)\n", encoding="utf-8"
+    )
+    project_status, _, project = _asgi_request("/projects", "POST", {
+        "name": "Audited project",
+        "project_path": "audited-repository",
+    })
+    assert project_status == 201
+    update_status, _, _ = _asgi_request(
+        f"/projects/{project['id']}",
+        "PATCH",
+        {"description": "Updated by an authenticated actor"},
+    )
+    assert update_status == 200
+    scan_status, _, _ = _asgi_request("/scan", "POST", {
+        "project_path": "audited-repository",
+    })
+    assert scan_status == 200
+    with database.get_connection() as connection:
+        scan_id = connection.execute(
+            "SELECT id FROM scans ORDER BY id DESC LIMIT 1"
+        ).fetchone()["id"]
+
+    status_status, _, _ = _asgi_request(
+        f"/findings/{scan_id}/0/status",
+        "PATCH",
+        {"status": "In Progress", "note": "Review started"},
+    )
+    assert status_status == 200
+    comment_status, _, _ = _asgi_request(
+        f"/findings/{scan_id}/0/comments",
+        "POST",
+        {"comment": "Review recorded"},
+    )
+    assert comment_status == 201
+    incident_status, _, incident = _asgi_request("/incidents", "POST", {
+        "title": "Audited incident",
+        "finding_refs": [[scan_id, 0]],
+    })
+    assert incident_status == 201
+    incident_update_status, _, _ = _asgi_request(
+        f"/incidents/{incident['id']}",
+        "PATCH",
+        {"status": "Investigating"},
+    )
+    assert incident_update_status == 200
+
+    with database.get_connection() as connection:
+        events = {
+            row["action"]: row["actor"]
+            for row in connection.execute(
+                """SELECT action, actor FROM audit_events
+                   WHERE action IN (
+                       'project.created', 'project.updated', 'scan.completed',
+                       'finding.status_changed', 'finding.commented',
+                       'incident.created', 'incident.updated'
+                   )"""
+            )
+        }
+        status_actor = connection.execute(
+            "SELECT actor FROM finding_status_history WHERE scan_id = ?",
+            (scan_id,),
+        ).fetchone()["actor"]
+        comment_actor = connection.execute(
+            "SELECT actor FROM finding_comments WHERE scan_id = ?",
+            (scan_id,),
+        ).fetchone()["actor"]
+        activity_actors = {
+            row["actor"]
+            for row in connection.execute(
+                "SELECT actor FROM incident_activity WHERE incident_id = ?",
+                (incident["id"],),
+            )
+        }
+
+    expected_actor = "audited-admin"
+    assert set(events.values()) == {expected_actor}
+    assert status_actor == expected_actor
+    assert comment_actor == expected_actor
+    assert activity_actors == {expected_actor}
+
+
+def test_http_sessions_revoke_on_logout_password_change_disable_and_expiry(
+    platform_db, monkeypatch
+):
+    global _HTTP_TEST_TOKEN
+    monkeypatch.setenv("SECURCODE_BOOTSTRAP_TOKEN", "test-bootstrap-token-with-at-least-32-bytes")
+    monkeypatch.setenv("SECURCODE_DEMO_MODE", "false")
+    _HTTP_TEST_TOKEN = None
+    bootstrap_status, _, bootstrap = _asgi_request("/auth/bootstrap", "POST", {
+        "username": "session-admin",
+        "password": "session-admin-password-long",
+        "bootstrap_token": "test-bootstrap-token-with-at-least-32-bytes",
+    })
+    assert bootstrap_status == 201
+    original_token = bootstrap["access_token"]
+
+    login_status, _, parallel_session = _asgi_request("/auth/login", "POST", {
+        "username": "session-admin",
+        "password": "session-admin-password-long",
+    })
+    assert login_status == 200
+    parallel_token = parallel_session["access_token"]
+
+    _HTTP_TEST_TOKEN = original_token
+    password_status, _, _ = _asgi_request("/auth/password", "POST", {
+        "current_password": "session-admin-password-long",
+        "new_password": "session-admin-new-password",
+    })
+    assert password_status == 200
+    assert _asgi_request("/auth/me")[0] == 200
+    _HTTP_TEST_TOKEN = parallel_token
+    assert _asgi_request("/auth/me")[0] == 401
+
+    _HTTP_TEST_TOKEN = original_token
+    assert _asgi_request(
+        "/auth/login",
+        "POST",
+        {
+            "username": "session-admin",
+            "password": "session-admin-password-long",
+        },
+    )[0] == 401
+    new_login_status, _, new_login = _asgi_request("/auth/login", "POST", {
+        "username": "session-admin",
+        "password": "session-admin-new-password",
+    })
+    assert new_login_status == 200
+    active_token = new_login["access_token"]
+
+    create_status, _, viewer = _asgi_request("/auth/users", "POST", {
+        "username": "disabled-viewer",
+        "password": "disabled-viewer-password-long",
+        "role": "read_only",
+    })
+    assert create_status == 201
+    viewer_login_status, _, viewer_session = _asgi_request("/auth/login", "POST", {
+        "username": "disabled-viewer",
+        "password": "disabled-viewer-password-long",
+    })
+    assert viewer_login_status == 200
+    viewer_token = viewer_session["access_token"]
+
+    _HTTP_TEST_TOKEN = active_token
+    disable_status, _, _ = _asgi_request(
+        f"/auth/users/{viewer['id']}",
+        "PATCH",
+        {"disabled": True},
+    )
+    assert disable_status == 200
+    _HTTP_TEST_TOKEN = viewer_token
+    assert _asgi_request("/auth/me")[0] == 401
+
+    _HTTP_TEST_TOKEN = active_token
+    expired_login_status, _, expired_login = _asgi_request("/auth/login", "POST", {
+        "username": "session-admin",
+        "password": "session-admin-new-password",
+    })
+    assert expired_login_status == 200
+    expired_token = expired_login["access_token"]
+    with database.get_connection() as connection:
+        connection.execute(
+            "UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?",
+            ("2000-01-01T00:00:00+00:00", auth._token_hash(expired_token)),
+        )
+    _HTTP_TEST_TOKEN = expired_token
+    assert _asgi_request("/auth/me")[0] == 401
+
+    _HTTP_TEST_TOKEN = active_token
+    logout_status, _, _ = _asgi_request("/auth/logout", "POST")
+    assert logout_status == 200
+    assert _asgi_request("/auth/me")[0] == 401
 
 
 def test_http_workflow_creates_project_scan_finding_incident_report_and_audit(platform_db, monkeypatch):
@@ -707,4 +1046,8 @@ def test_http_workflow_creates_project_scan_finding_incident_report_and_audit(pl
     csv_status, _, csv_body = _asgi_request("/reports/findings.csv")
     assert csv_status == 200
     assert "PYSEC003" in csv_body
+    sarif_status, _, sarif_body = _asgi_request("/reports/findings.sarif")
+    assert sarif_status == 200
+    assert sarif_body["version"] == "2.1.0"
+    assert sarif_body["runs"][0]["results"][0]["ruleId"] == "PYSEC003"
     _HTTP_TEST_TOKEN = None
