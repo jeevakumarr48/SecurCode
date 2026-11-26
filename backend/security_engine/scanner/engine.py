@@ -127,8 +127,9 @@ def _source_files(path, errors):
                 })
                 continue
             traversable_directories.append(directory)
-        directories[:] = traversable_directories
-        for filename in filenames:
+        # Sorted traversal: results and limits must not depend on filesystem order.
+        directories[:] = sorted(traversable_directories)
+        for filename in sorted(filenames):
             candidate = root_path / filename
             if candidate.is_symlink():
                 if (

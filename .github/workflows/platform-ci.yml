@@ -174,21 +174,30 @@ jobs:
         with: { persist-credentials: false }
       - name: Build images
         run: |
+          exec > >(tee -a "$RUNNER_TEMP/containers.log") 2>&1
           docker build -f backend/Dockerfile -t securcode-api:ci .
           docker build -f frontend/Dockerfile -t securcode-web:ci .
       - name: Image runs as non-root and the CLI imports
         run: |
+          exec > >(tee -a "$RUNNER_TEMP/containers.log") 2>&1
           test "$(docker run --rm --entrypoint id securcode-api:ci -u)" = "10001"
           docker run --rm -e SECURCODE_ENV=test -e SECURCODE_DATABASE_URL=sqlite:////tmp/x.db securcode-api:ci python -c "import app.main"
       - uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
         with: { version: v0.76.1, cache: true }
       - name: Trivy image scan (fail on fixable HIGH/CRITICAL)
         run: |
+          exec > >(tee -a "$RUNNER_TEMP/containers.log") 2>&1
           # /scanner-fixtures holds intentionally vulnerable demo code with fake
           # credentials; it is secret-scanned (and excluded) in the repo scan.
           trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress --skip-dirs /scanner-fixtures securcode-api:ci
           trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress securcode-web:ci
       - name: Dockerfile and compose misconfiguration scan
         run: |
+          exec > >(tee -a "$RUNNER_TEMP/containers.log") 2>&1
           trivy config --exit-code 1 --severity HIGH,CRITICAL backend/Dockerfile
           trivy config --exit-code 1 --severity HIGH,CRITICAL frontend/Dockerfile
+      - name: Report container failures as annotations
+        if: failure()
+        run: |
+          grep -E "ERROR|[Ee]rror:|Total: [1-9]|CVE-|GHSA-|AVD-|DS-?[0-9]{3}" "$RUNNER_TEMP/containers.log" \
+            | grep -v "^::" | cut -c1-300 | tail -n 9 | sed 's/^/::error title=containers::/' || true
