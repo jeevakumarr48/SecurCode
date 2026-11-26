@@ -8,7 +8,8 @@ COPY frontend/ ./
 ENV VITE_SAME_ORIGIN_API=true
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:stable-alpine
+# Mainline nginx: the stable branch image still carried nginx CVEs fixed upstream.
+FROM nginxinc/nginx-unprivileged:mainline-alpine
 USER root
 RUN apk upgrade --no-cache
 USER 101
