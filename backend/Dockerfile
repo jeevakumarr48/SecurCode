@@ -19,7 +19,13 @@ RUN groupadd --system --gid 10001 securcode \
 
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+# Install runtime dependencies, then drop the build-only packaging tools so no
+# stale setuptools/wheel copy (e.g. CVE-2025-47273) ships in the runtime image.
+RUN pip install -r requirements.txt \
+ && python -m pip uninstall -y setuptools wheel \
+ && find / -xdev -depth \( -name 'setuptools' -o -name 'setuptools-*' -o -name '_distutils_hack' \
+      -o -name 'distutils-precedence.pth' -o -name 'wheel-*.dist-info' \) -print -exec rm -rf {} + \
+ && python -c "import fastapi, sqlalchemy, alembic, argon2, cryptography, psycopg, uvicorn"
 
 COPY --chown=securcode:securcode backend/ ./
 COPY --chown=securcode:securcode scanner-fixtures/ /scanner-fixtures/
