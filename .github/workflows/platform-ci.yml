@@ -31,13 +31,22 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Lint platform code (strict security rules)
         working-directory: backend
-        run: ruff check app/v1 security_engine/scanner/extended.py security_engine/scanner/rules.py security_engine/scanner/runner.py security_engine/benchmark_v2.py tests_v1 migrations conftest.py
+        run: ruff check --output-format=github app/v1 security_engine/scanner/extended.py security_engine/scanner/rules.py security_engine/scanner/runner.py security_engine/benchmark_v2.py tests_v1 migrations conftest.py
       - name: Lint legacy code (syntax and undefined names only)
         working-directory: backend
-        run: ruff check . --select E9,F63,F7,F82
+        run: ruff check --output-format=github . --select E9,F63,F7,F82
       - name: Full test suite (legacy + platform)
         working-directory: backend
-        run: python -m pytest -q
+        run: |
+          set +e
+          python -m pytest -q -rfE -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface failures as annotations (readable without opening the log).
+            grep -E "^(FAILED|ERROR) " "$RUNNER_TEMP/pytest.log" | head -8 | sed 's/^/::error title=pytest::/'
+            grep -E "^E +" "$RUNNER_TEMP/pytest.log" | head -2 | sed 's/^/::error title=pytest detail::/'
+          fi
+          exit "$status"
       - name: Migration drift check
         working-directory: backend
         env: { SECURCODE_ENV: test, SECURCODE_DATABASE_URL: "sqlite:////tmp/drift.db" }
@@ -175,7 +184,9 @@ jobs:
         with: { version: v0.76.1, cache: true }
       - name: Trivy image scan (fail on fixable HIGH/CRITICAL)
         run: |
-          trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress securcode-api:ci
+          # /scanner-fixtures holds intentionally vulnerable demo code with fake
+          # credentials; it is secret-scanned (and excluded) in the repo scan.
+          trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress --skip-dirs /scanner-fixtures securcode-api:ci
           trivy image --exit-code 1 --ignore-unfixed --severity HIGH,CRITICAL --no-progress securcode-web:ci
       - name: Dockerfile and compose misconfiguration scan
         run: |

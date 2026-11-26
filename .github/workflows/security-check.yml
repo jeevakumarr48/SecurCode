@@ -35,7 +35,16 @@ jobs:
 
       - name: Run backend tests
         working-directory: backend
-        run: python -m pytest -v
+        run: |
+          set +e
+          python -m pytest -v -rfE -p no:cacheprovider 2>&1 | tee "$RUNNER_TEMP/pytest.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface failures as annotations (readable without opening the log).
+            grep -E "^(FAILED|ERROR) " "$RUNNER_TEMP/pytest.log" | head -8 | sed 's/^/::error title=pytest::/'
+            grep -E "^E +" "$RUNNER_TEMP/pytest.log" | head -2 | sed 's/^/::error title=pytest detail::/'
+          fi
+          exit "$status"
 
       - name: Run changed-file security gate
         working-directory: backend
