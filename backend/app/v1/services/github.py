@@ -41,13 +41,35 @@ def set_transport(transport: httpx.BaseTransport | None) -> None:
     _transport = transport
 
 
+class _GuardedTransport(httpx.BaseTransport):
+    """Turns network failures (DNS, TLS, timeouts) into GitHubError so callers
+    report "GitHub unreachable" instead of failing with an unhandled 500."""
+
+    def __init__(self, inner: httpx.BaseTransport):
+        self._inner = inner
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return self._inner.handle_request(request)
+        except httpx.TransportError as error:
+            logger.warning("GitHub request to %s failed: %s", request.url.host, type(error).__name__)
+            raise GitHubError("Could not reach GitHub; try again later.", status=503) from None
+
+    def close(self) -> None:
+        self._inner.close()
+
+
+def _guarded_transport() -> httpx.BaseTransport:
+    return _GuardedTransport(_transport if _transport is not None else httpx.HTTPTransport())
+
+
 def _allowed_hosts() -> set[str]:
     return {urlsplit(platform_settings.github_api_url).hostname or "api.github.com", *ARCHIVE_HOSTS}
 
 
 def _client(token: str) -> httpx.Client:
     return httpx.Client(
-        base_url=platform_settings.github_api_url, timeout=TIMEOUT, follow_redirects=False, transport=_transport,
+        base_url=platform_settings.github_api_url, timeout=TIMEOUT, follow_redirects=False, transport=_guarded_transport(),
         headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "SecurCode"},
     )
@@ -122,7 +144,7 @@ def download_repository_archive(integration: Integration, full_name: str, ref: s
                 raise GitHubError("GitHub redirected to an unexpected host; download refused.")
             hops += 1
             # Archive hosts receive a short-lived signed URL; never forward the token there.
-            with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=_transport,
+            with httpx.Client(timeout=TIMEOUT, follow_redirects=False, transport=_guarded_transport(),
                               headers={"User-Agent": "SecurCode"}) as archive_client:
                 with archive_client.stream("GET", location) as stream:
                     if stream.status_code in (301, 302, 303, 307, 308):

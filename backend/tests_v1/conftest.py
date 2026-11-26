@@ -44,6 +44,20 @@ def clean_tables(migrated_database):
             conn.execute(text("PRAGMA foreign_keys=ON"))
 
 
+@pytest.fixture(autouse=True)
+def no_real_github():
+    """Tests must never reach the real GitHub API. Unless a test installs its
+    own fake, every GitHub call is answered with 401 (as GitHub would for a
+    made-up token), so results do not depend on network access."""
+    import httpx
+
+    from app.v1.services import github as gh
+
+    gh.set_transport(httpx.MockTransport(lambda request: httpx.Response(401, json={"message": "Bad credentials"})))
+    yield
+    gh.set_transport(None)
+
+
 @pytest.fixture(scope="session")
 def app():
     from app.main import app as fastapi_app

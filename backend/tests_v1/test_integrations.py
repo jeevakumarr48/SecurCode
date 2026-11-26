@@ -222,3 +222,13 @@ def test_sarif_import_validates_schema(owner):
     assert imported.status_code == 201 and imported.json()["new_findings"] == 1
     finding = owner.get(f"/api/v1/organizations/{owner.org_id}/findings").json()["items"][0]
     assert finding["rule_id"] == "ExternalTool:EXT1" and finding["severity"] == "high" and finding["line"] == 4
+
+
+def test_github_network_failure_is_reported_not_500(owner):
+    def unreachable(request):
+        raise httpx.ConnectError("network down", request=request)
+
+    gh.set_transport(httpx.MockTransport(unreachable))
+    response = owner.post(f"/api/v1/organizations/{owner.org_id}/integrations/github", json={"token": TOKEN})
+    assert response.status_code == 502
+    assert "Could not reach GitHub" in response.json()["detail"]
