@@ -201,3 +201,10 @@ jobs:
         run: |
           grep -E "ERROR|[Ee]rror:|Total: [1-9]|CVE-|GHSA-|AVD-|DS-?[0-9]{3}" "$RUNNER_TEMP/containers.log" \
             | grep -v "^::" | cut -c1-300 | tail -n 9 | sed 's/^/::error title=containers::/' || true
+          # Name the exact file each vulnerable package was found in.
+          for image in securcode-api:ci securcode-web:ci; do
+            skip=""; [ "$image" = securcode-api:ci ] && skip="--skip-dirs /scanner-fixtures"
+            trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --no-progress -q $skip --format template \
+              --template '{{ range . }}{{ $t := .Target }}{{ range .Vulnerabilities }}::error title=trivy {{ .VulnerabilityID }}::{{ .PkgName }} {{ .InstalledVersion }} in {{ $t }} at {{ .PkgPath }}{{ "\n" }}{{ end }}{{ end }}' \
+              "$image" 2>/dev/null | head -n 5 || true
+          done
